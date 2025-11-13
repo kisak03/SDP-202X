@@ -28,136 +28,87 @@ This project demonstrates the use of:
 ```
 202X/
 │
-├─ README.md
 ├─ main.py
-├─ .gitignore
 │
 ├─ src/
-│  ├─ __init__.py
-│  │
-│  ├─ audio/
-│  │   ├─ __init__.py
-│  │   └─ sound_manager.py
-│  │
 │  ├─ core/
 │  │   ├─ __init__.py
+│  │   ├─ game_loop.py
+│  │   ├─ settings.py
 │  │   │
-│  │   ├─ debug/
+│  │   ├─ engine/
 │  │   │   ├─ __init__.py
-│  │   │   ├─ debug_hud.py
-│  │   │   └─ debug_logger.py
-│  │   │
-│  │   ├─ runtime/
-│  │   │   ├─ __init__.py
-│  │   │   ├─ game_loop.py
-│  │   │   ├─ game_settings.py
-│  │   │   ├─ game_state.py
+│  │   │   ├─ display_manager.py
+│  │   │   ├─ input_manager.py
 │  │   │   └─ scene_manager.py
 │  │   │
-│  │   └─ services/
+│  │   └─ utils/
 │  │       ├─ __init__.py
-│  │       ├─ config_manager.py
-│  │       ├─ display_manager.py
-│  │       └─ input_manager.py
-│  │
-│  ├─ data/
-│  │   ├─ configs/
-│  │   │   └─ player_config.py
-│  │   │
-│  │   └─ levels/
-│  │       └─ Stage 1.py
+│  │       └─ debug_logger.py
 │  │
 │  ├─ entities/
 │  │   ├─ __init__.py
+│  │   ├─ player.py
 │  │   ├─ base_entity.py
-│  │   ├─ entity_registry.py
-│  │   ├─ entity_state.py
-│  │   ├─ status_manager.py
 │  │   │
-│  │   ├─ bullets/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ base_bullet.py
-│  │   │  └─ bullet_straight.py
-│  │   │
-│  │   ├─ enemies/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ base_enemy.py
-│  │   │  └─ enemy_straight.py
-│  │   │
-│  │   └─ player/
+│  │   └─ enemies/
 │  │      ├─ __init__.py
-│  │      ├─ player_ability.py
-│  │      ├─ player_core.py
-│  │      ├─ player_logic.py
-│  │      ├─ player_movement.py
-│  │      └─ player_state.py
+│  │      ├─ enemy.py
+│  │      └─ enemy_basic.py
 │  │
 │  ├─ graphics/
 │  │   ├─ __init__.py
-│  │   ├─ draw_manager.py
-│  │   │
-│  │   └─ animations/
-│  │      ├─ __init__.py
-│  │      ├─ animation_controller.py
-│  │      ├─ animation_manager.py
-│  │      │
-│  │      ├─ animation_effects/
-│  │      │  ├─ __init__.py
-│  │      │  ├─ common_animation.py
-│  │      │  ├─ damage_animation.py
-│  │      │  ├─ death_animation.py
-│  │      │  └─ movement_animation.py
-│  │      │
-│  │      └─ entities/
-│  │         ├─ __init__.py
-│  │         ├─ enemy_animation.py
-│  │         └─ player_animation.py
+│  │   └─ draw_manager.py
 │  │
 │  ├─ scenes/
 │  │   ├─ __init__.py
 │  │   ├─ game_scene.py
-│  │   ├─ pause_scene.py (empty)
+│  │   ├─ pause_scene.py
 │  │   └─ start_scene.py
 │  │
 │  ├─ systems/
 │  │   ├─ __init__.py
-│  │   │
-│  │   ├─ collision/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ collision_hitbox.py
-│  │   │  └─ collision_manager.py
-│  │   │
-│  │   ├─ combat/
-│  │   │  ├─ __init__.py
-│  │   │  └─ bullet_manager.py
-│  │   │
-│  │   └─ level/
-│  │      ├─ __init__.py
-│  │      ├─ level_manager.py
-│  │      ├─ pattern_registry.py
-│  │      └─ spawn_manager.py
+│  │   ├─ collision_manager.py
+│  │   ├─ sound_manager.py
+│  │   ├─ spawn_manager.py
+│  │   └─ stage_manager.py
 │  │
 │  └─ ui/
 │      ├─ __init__.py
-│      ├─ base_ui.py
-│      ├─ menu_manager.py (empty)
-│      ├─ ui_manager.py
 │      │
-│      ├─ components/
+│      ├─ effects/
 │      │  ├─ __init__.py
-│      │  └─ ui_button.py
+│      │  ├─ ui_animation.py - null
+│      │  └─ ui_fade.py - null
 │      │
-│      └─ effects/
-│         ├─ __init__.py
-│         ├─ ui_animation.py (empty)
-│         └─ ui_fade.py (empty)
+│      ├─ subsystems/
+│      │  ├─ __init__.py - null
+│      │  ├─ debug_hud.py
+│      │  ├─ hud_manager.py
+│      │  └─ menu_manager.py - null
+│      │
+│      ├─ __init__.py
+│      ├─ button.py
+│      ├─ ui_element.py
+│      └─ ui_manager.py
 │
-└─ assets/
-   ├─ images/
-   │   ├─ player.png (unused)
-   │   │
-   │   └─ icons/
-   │       └─ 202X_icon.png
-   │
-   └─ audio/
+├─ assets/
+│  ├─ images/
+│  │   ├─ player.png
+│  │   ├─ enemies/
+│  │   ├─ bullets/
+│  │   └─ effects/
+│  │
+│  ├─ sounds/
+│  │   ├─ shoot.wav
+│  │   ├─ explosion.wav
+│  │   └─ bgm.ogg
+│  │
+│  └─ fonts/
+│      └─ arcade.ttf
+│
+├─ assets/
+│  └─ player_config.json
+│
+└─ README.md
 ```

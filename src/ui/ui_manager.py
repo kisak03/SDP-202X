@@ -1,7 +1,7 @@
 """
 ui_manager.py
 -------------
-Central controller for all UI elements and UI components.
+Central controller for all UI elements and UI subsystems.
 
 Responsibilities
 ----------------
@@ -10,11 +10,13 @@ Responsibilities
 - Update element states each frame (hover detection, animation).
 - Handle mouse click actions.
 - Delegate rendering requests to the DrawManager.
-- Attach specialized UI components like HUDManager or DebugHUD.
+- Attach specialized UI subsystems like HUDManager or DebugHUD.
 """
 
 import pygame
-from src.core.debug.debug_logger import DebugLogger
+from src.core.settings import Display
+from src.ui.button import Button
+from src.core.utils.debug_logger import DebugLogger
 
 class UIManager:
     """Manages all UI elements: creation, updates, input, and rendering."""
@@ -48,8 +50,7 @@ class UIManager:
 
         # Initialize base developer UI
         self._create_base_ui()
-
-        DebugLogger.init_entry("UIManager")
+        # DebugLogger.system("Initialized with default groups and subsystems")
 
     # ===========================================================
     # Initialization Helpers
@@ -115,7 +116,7 @@ class UIManager:
     # Frame Updates
     # ===========================================================
     def update(self, mouse_pos):
-        """Update all visible elements in the active group and components."""
+        """Update all visible elements in the active group and subsystems."""
         # Update standalone elements in current active group
         for elem in self.groups[self.active_group]:
             if elem.visible:
@@ -125,19 +126,19 @@ class UIManager:
         for subsystem in self.subsystems.values():
             subsystem.update(mouse_pos)
 
-        # DebugLogger.state(f"Updated group '{self.active_group}' and components")
+        # DebugLogger.state(f"Updated group '{self.active_group}' and subsystems")
 
     # ===========================================================
     # Input Handling
     # ===========================================================
     def handle_event(self, event):
         """
-        Route input events to UI elements and components.
+        Route input events to UI elements and subsystems.
 
         Returns:
             str | None: Action string (e.g., 'pause', 'quit') if triggered.
         """
-        # Route to components first (so menus/debug can intercept)
+        # Route to subsystems first (so menus/debug can intercept)
         for subsystem in self.subsystems.values():
             action = subsystem.handle_event(event)
             if action:
@@ -158,8 +159,8 @@ class UIManager:
     # Rendering
     # ===========================================================
     def draw(self, draw_manager):
-        """Render all active UI elements and visible components."""
-        # Draw components (HUDs, debug overlays)
+        """Render all active UI elements and visible subsystems."""
+        # Draw subsystems (HUDs, debug overlays)
         for subsystem in self.subsystems.values():
             subsystem.draw(draw_manager)
 
@@ -168,4 +169,4 @@ class UIManager:
             if elem.visible:
                 draw_manager.queue_draw(elem.render_surface(), elem.rect, elem.layer)
 
-    # DebugLogger.state(f"Drew UI group '{self.active_group}' and components")
+    # DebugLogger.state(f"Drew UI group '{self.active_group}' and subsystems")

@@ -41,14 +41,14 @@ jobs:
         ls dist\
 
     - name: Upload artifact
-      if: ${{ matrix.os }} == "windows-latest"
+      if: ${{ matrix.os == 'windows-latest' }}
       uses: actions/upload-artifact@v4
       with:
         name: windows_file
         path: dist/main.exe
 
     - name: Upload artifact
-      if: ${{ matrix.os }} == "macos-latest"
+      if: ${{ matrix.os == 'macos-latest' }}
       uses: actions/upload-artifact@v4
       with:
         name: mac_file

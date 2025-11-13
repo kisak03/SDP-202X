@@ -38,4 +38,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: exe_file
-        path: .\dist\main.exe​
+        path: /SDP-202X/SDP-202X/dist/main.exe

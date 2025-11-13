@@ -35,4 +35,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: exe_file
-        path: dist/main.exe​
+        path: ${GITHUB_WORKSPAE}/dist/main.exe​

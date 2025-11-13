@@ -25,7 +25,7 @@ jobs:
         python-version: "3.11"
     - name: pwd
       run: |
-        echo "$GITHUB_WORKSPACE"
+        $pwd
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

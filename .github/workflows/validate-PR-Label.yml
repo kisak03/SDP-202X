@@ -4,8 +4,7 @@ on:
     branches: [main]
     types: [labeled, unlabeled, opened, edited, reopened, synchronize, ready_for_review]
 jobs:
-  check-pr:
-    name: Validate Release Label
+  check-pr-label:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,0 +1,39 @@
+name: release
+on:
+  push:
+    branches:
+      - main
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: create a tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          release_branches: main
+          default_bump: patch
+          custom_release_rules: feat:minor:Feature, wip:minor:Wip, refactor:minor:Refactoring, fix:patch:Fix
+
+      - name: Create a GitHub release
+        uses: ncipollo/release-action@v1
+        id: create_release
+        with:
+          tag: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
+
+    outputs:
+      tag: ${{ steps.tag_version.outputs.new_tag }}
+      release_url: ${{ steps.create_release.outputs.upload_url }}
+
+  call-build-action:
+    needs: release
+    uses: ./.github/workflows/python-exe.yml
+    secrets: inherit
+    with:
+      tags: ${{ needs.release.outputs.tag }}
+      release_urls: ${{ needs.release.outputs.release_url }}

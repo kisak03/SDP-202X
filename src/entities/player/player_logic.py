@@ -1,16 +1,17 @@
 """
 player_logic.py
 ---------------
-Player-specific behavior hooks and effect management.
+Player-specific behavior hooks and effects management.
 
 These functions are called by entity_logic.py or directly by player systems.
 They handle player-exclusive logic like i-frames, death cleanup, and visuals.
 """
 
 from src.core.debug.debug_logger import DebugLogger
+from src.core.services.event_manager import PlayerHealthEvent, FireRateEvent
 from src.entities.entity_state import LifecycleState
-from src.entities.player.player_state import PlayerEffectState, InteractionState
-from src.graphics.animations.entities_animation.player_animation import damage_player, death_player
+from src.entities.entity_state import InteractionState
+from src.entities.player.player_state import PlayerEffectState
 
 
 # ===========================================================
@@ -22,7 +23,7 @@ def damage_collision(player, other):
 
     Flow:
         - Skip if player is invincible, intangible, or already dead
-        - Skip if any temporary effect (e.g., iframe) is active
+        - Skip if any temporary effects (e.g., iframe) is active
         - Retrieve damage value from collided entity
         - Apply damage and trigger IFRAME via EffectManager
     """
@@ -51,10 +52,8 @@ def damage_collision(player, other):
 
     # Handle player death
     if player.health <= 0:
-        print("ded")
         on_death(player)
         return
-    print("not ded")
 
     # Determine target visual state
     if player.health <= player._threshold_critical:
@@ -64,16 +63,16 @@ def damage_collision(player, other):
     else:
         target_state = "normal"
 
-    iframe_time = player.status_manager.effect_config["iframe"]["duration"]
-    previous_state = player._current_visual_state  # Get OLD state before damage
+    iframe_time = player.state_manager.state_config.get("iframe", {}).get("duration", 1.0)
+    previous_state = player._current_sprite  # Get OLD state before damage
 
     DebugLogger.state(
         f"Visual transition: {previous_state} → {target_state}",
         category="animation"
     )
 
-    player.anim.play(
-        damage_player,
+    player.anim_manager.play(
+        "damage",  # Use string name, not function
         duration=iframe_time,
         blink_interval=0.1,
         previous_state=previous_state,
@@ -81,12 +80,9 @@ def damage_collision(player, other):
     )
 
     # Trigger IFRAME and update visuals
-    player.status_manager.activate(PlayerEffectState.IFRAME)
+    player.state_manager.timed_state(PlayerEffectState.IFRAME)
 
 
-# ===========================================================
-# Entity Hook: Death Cleanup
-# ===========================================================
 def on_death(player):
     """
     Called automatically by entity_logic.handle_death() when player HP reaches zero.
@@ -96,39 +92,10 @@ def on_death(player):
     DebugLogger.state("Player death triggered", category="player")
 
     # Start the death animation
-    player.anim.play(death_player, duration=1.0)
+    player.anim_manager.play("death", duration=1.0)
 
     # Enter DYING state (BaseEntity handles this)
     player.mark_dead()
 
     # Disable collisions during death animation
     player.collision_tag = "neutral"
-
-
-# ===========================================================
-# Visual Update Hook
-# ===========================================================
-# def update_visual_state(player):
-#     """Update player visuals based on health thresholds from config."""
-#     health = player.health
-#     if health == player._cached_health:
-#         return
-#
-#     player._cached_health = health
-#
-#     # Determine state
-#     if health <= player._threshold_critical:
-#         state_key = "damaged_critical"
-#     elif health <= player._threshold_moderate:
-#         state_key = "damaged_moderate"
-#     else:
-#         state_key = "normal"
-#
-#     player._current_visual_state = state_key
-#
-#     if player.render_mode == "shape":
-#         player.refresh_visual(new_color=player.get_target_color(state_key))
-#     else:
-#         new_image = player.get_target_image(state_key)
-#         if new_image:
-#             player.refresh_visual(new_image=new_image)

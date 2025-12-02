@@ -1,15 +1,15 @@
 """
 config_manager.py
 -----------------
-Universal configuration loader for engine and game data.
+Universal configuration loader for engine and game config.
 
 Features
 --------
 - Supports .json and .py config files
 - Accepts filenames or absolute paths
-- Automatically searches multiple data directories
+- Automatically searches multiple config directories
 - Recursively merges defaults
-- Ignores '_notes' keys for human-readable configs
+- Ignores '_notes' keys for human-readable entities_config
 - Logs results through DebugLogger
 """
 
@@ -21,12 +21,12 @@ from src.core.debug.debug_logger import DebugLogger
 # ===========================================================
 # Base directories (search order)
 # ===========================================================
-DATA_ROOT = os.path.join("src", "data")
+DATA_ROOT = os.path.join("src", "config")
 SEARCH_DIRS = [
-    os.path.join(DATA_ROOT, "config"),
-    os.path.join(DATA_ROOT, "configs"),  # plural fallback
+    DATA_ROOT,
+    os.path.join(DATA_ROOT, "entities"),  # plural fallback
     os.path.join(DATA_ROOT, "levels"),
-    DATA_ROOT,  # final fallback
+os.path.join(DATA_ROOT, "animations"),
 ]
 
 
@@ -54,7 +54,7 @@ def _load_py_module(py_path):
         spec.loader.exec_module(module)
         DebugLogger.system(f"Loaded {os.path.basename(py_path)} (Python)", category="loading")
         return getattr(module, "DEFAULT_CONFIG", {})
-    except Exception as e:
+    except (ImportError, AttributeError, FileNotFoundError, SyntaxError) as e:
         DebugLogger.warn(f"Failed to load Python config {py_path}: {e}", category="loading")
         return {}
 
@@ -68,7 +68,7 @@ def load_config(filename, default_dict=None):
 
     Args:
         filename (str): Filename or full path (.json or .py)
-        default_dict (dict, optional): Default fallback data
+        default_dict (dict, optional): Default fallback config
 
     Returns:
         dict: Merged configuration
@@ -103,7 +103,7 @@ def load_config(filename, default_dict=None):
 
         return _merge_dicts(default_dict, data)
 
-    except Exception as e:
+    except (json.JSONDecodeError, FileNotFoundError, IOError) as e:
         DebugLogger.warn(f"Failed to load {path}: {e} — using defaults", category="loading")
         return default_dict.copy()
 
@@ -127,7 +127,7 @@ def _resolve_search_path(filename):
             if os.path.exists(candidate + ext):
                 return candidate + ext
 
-        # 🔹 NEW: try searching one level deep (e.g., Stage 1.json anywhere under levels/)
+        # 🔹 NEW: try searching one level deep (e.g., Stage 1.json anywhere under levels_config/)
         for root, _, files in os.walk(directory):
             for file in files:
                 if file == filename or file == filename + ".json" or file == filename + ".py":

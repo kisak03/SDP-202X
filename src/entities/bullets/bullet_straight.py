@@ -11,10 +11,16 @@ Responsibilities
 """
 
 from src.entities.bullets.base_bullet import BaseBullet
+from src.entities.entity_types import EntityCategory
 
 
 class StraightBullet(BaseBullet):
     """Simple bullet that travels in a straight line."""
+
+    __registry_category__ = EntityCategory.PROJECTILE
+    __registry_name__ = "straight"
+
+    __slots__ = ()
 
     # ===========================================================
     # Initialization
@@ -22,12 +28,6 @@ class StraightBullet(BaseBullet):
     def __init__(self, *args, **kwargs):
         """Initialize a straight-line bullet instance."""
         super().__init__(*args, **kwargs)
-
-        # Ensure consistent collision tag
-        self.collision_tag = f"{self.owner}_bullet"
-
-        # Optional debug trace
-        # DebugLogger.trace(f"[BulletInit] StraightBullet ({self.owner}) created")
 
     # ===========================================================
     # Update Logic
@@ -41,7 +41,7 @@ class StraightBullet(BaseBullet):
 
         # Future extensions:
         # - Add sprite rotation based on velocity vector.
-        # - Add glow/trail or hit effect emitters.
+        # - Add glow/trail or hit effects emitters.
 
     # ===========================================================
     # Rendering
@@ -54,7 +54,3 @@ class StraightBullet(BaseBullet):
         """
         super().draw(draw_manager)
         # Future: Add glow, flicker, or material animation_effects here.
-
-
-from src.entities.entity_registry import EntityRegistry
-EntityRegistry.register("bullet", "straight", StraightBullet)

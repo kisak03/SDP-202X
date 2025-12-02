@@ -6,10 +6,10 @@ and efficiently sending them to the main display surface.
 
 Responsibilities
 ----------------
-- Load and cache images used by entities_animation and UI.
+- Load and cache images used by entities_animation and ui.
 - Maintain a draw queue (layered rendering system).
 - Sort queued draw calls by layer each frame and render them.
-- Provide helper methods for entities_animation and UI elements to queue themselves.
+- Provide helper methods for entities_animation and ui elements to queue themselves.
 """
 
 import pygame
@@ -26,13 +26,17 @@ class DrawManager:
     # ===========================================================
     def __init__(self):
         self.images = {}
-        # Layer buckets instead of flat queue
-        self.layers = {}  # {layer: [(surface, rect), ...]}
+        # Separate layer buckets for surfaces and shapes (avoids isinstance checks)
+        self.surface_layers = {}  # {layer: [(surface, rect), ...]}
+        self.shape_layers = {}  # {layer: [shape_data, ...]}
         self._layer_keys_cache = []
         self._layers_dirty = False
-        self.surface = None  # Expose active surface for debug/hitbox draws
+
         self.background = None  # Cached background surface (optional)
+
         self.debug_hitboxes = []  # Persistent list for queued hitboxes
+        self.debug_obbs = []  # Persistent list for queued OBB lines
+
         DebugLogger.init_entry("DrawManager")
 
     # --------------------------------------------------------
@@ -66,7 +70,7 @@ class DrawManager:
 
     def load_icon(self, name, size=(24, 24)):
         """
-        Load or retrieve a cached UI icon.
+        Load or retrieve a cached ui icon.
 
         Args:
             name (str): Name of the icon file (without extension).
@@ -122,13 +126,14 @@ class DrawManager:
         Simply clears existing layer lists to reduce
         Python-level allocations and GC churn.
         """
-        for layer_items in self.layers.values():
+        for layer_items in self.surface_layers.values():
             layer_items.clear()
 
-        if hasattr(self, "debug_hitboxes"):
-            self.debug_hitboxes.clear()
+        for layer_items in self.shape_layers.values():
+            layer_items.clear()
 
-        self._layers_dirty = True
+        self.debug_hitboxes.clear()
+        self.debug_obbs.clear()
 
     def queue_draw(self, surface, rect, layer=0):
         """
@@ -143,11 +148,11 @@ class DrawManager:
             DebugLogger.warn(f"Skipped invalid draw call at layer {layer}")
             return
 
-        if layer not in self.layers:
-            self.layers[layer] = []
+        if layer not in self.surface_layers:
+            self.surface_layers[layer] = []
             self._layers_dirty = True
 
-        self.layers[layer].append((surface, rect))
+        self.surface_layers[layer].append((surface, rect))
 
     def draw_entity(self, entity, layer=0):
         """
@@ -172,11 +177,22 @@ class DrawManager:
         parameters instead of allocating `pygame.Surface` objects.
         These are drawn directly during render() for near-zero overhead.
         """
-        if not hasattr(self, "debug_hitboxes"):
-            self.debug_hitboxes = []
 
         # Store draw command for later rendering (no surface creation)
         self.debug_hitboxes.append((rect, color, width))
+
+    def queue_obb(self, corners, color=(255, 0, 0), width=2):
+        """
+        Queue OBB corner lines for rendering on the DEBUG layer.
+
+        Args:
+            corners (list): List of (x, y) corner points
+            color (tuple): RGB color for the lines
+            width (int): Line width
+        """
+
+        # Store draw command for later rendering
+        self.debug_obbs.append((corners, color, width))
 
     # ===========================================================
     # Shape Queueing
@@ -192,43 +208,44 @@ class DrawManager:
             layer (int): Rendering layer (lower values draw first).
             **kwargs: Additional shape-specific parameters (e.g., width, points).
         """
-        if layer not in self.layers:
-            self.layers[layer] = []
+        if layer not in self.shape_layers:
+            self.shape_layers[layer] = []
             self._layers_dirty = True
 
-        # Add tagged shape command for later rendering
-        self.layers[layer].append(("shape", shape_type, rect, color, kwargs))
+        # Add shape command for later rendering
+        self.shape_layers[layer].append((shape_type, rect, color, kwargs))
 
     # ===========================================================
     # Shape Prebaking (Optimization)
     # ===========================================================
-    def prebake_shape(self, type, size, color, **kwargs):
+    def prebake_shape(self, type: str, size: tuple[int, int] | int, color: tuple[int, int, int],
+                      **kwargs) -> pygame.Surface:
         """
-        Convert a shape definition into a cached image surface.
+        Pre-render a shape into a reusable surface (optimization).
 
-        This is an optimization for static shapes (bullets, enemies) that don't
-        change color/size at runtime. The shape is drawn once to a surface at
-        creation time, then reused as a sprite for fast batched rendering.
+        INTERNAL USE ONLY: This method is called by BaseEntity.__init__()
+        when shape_data is provided. Entities should NEVER call this directly.
 
-        Performance: Prebaked shapes render at image speed (~4x faster than
-        per-frame shape drawing for 500+ entities_animation).
+        Entities: Use the shape_data pattern instead:
+            # CORRECT usage:
+            super().__init__(x, y,
+                shape_data={"type": "circle", "size": (8, 8), "color": (255, 255, 0)},
+                draw_manager=draw_manager
+            )
 
-        Args:
-            type (str): Shape type ("rect", "circle", "ellipse", etc.)
-            size (tuple[int, int]): Width and height of the surface
-            color (tuple[int, int, int]): RGB color
-            **kwargs: Shape-specific parameters (e.g., width for outline)
+            # INCORRECT usage (DO NOT DO THIS):
+            image = draw_manager.prebake_shape("circle", (8, 8), (255, 255, 0))
+            super().__init__(x, y, image=image)
 
         Returns:
             pygame.Surface: A surface with the shape pre-rendered
-
-        Example:
-            # In bullet __init__:
-            bullet_sprite = draw_manager.prebake_shape(
-                "circle", (8, 8), (255, 255, 0)
-            )
-            super().__init__(x, y, image=bullet_sprite)
         """
+        # Handle equilateral triangle size calculation
+        if type == "triangle" and kwargs.get("equilateral"):
+            w = size if isinstance(size, int) else size[0]
+            h = int(w * math.sqrt(3) / 2)
+            size = (w, h)
+
         # Create cache key for reusing identical shapes
         cache_key = f"shape_{type}_{size}_{color}_{tuple(sorted(kwargs.items()))}"
 
@@ -236,65 +253,23 @@ class DrawManager:
         if cache_key in self.images:
             return self.images[cache_key]
 
-        # Create new surface with transparency
-        surface = pygame.Surface(size, pygame.SRCALPHA)
-        temp_rect = pygame.Rect(0, 0, *size)
+        # Square-pad shape to ensure correct rotation behavior
+        max_dim = max(size)  # ensure square
+        square_surface = pygame.Surface((max_dim, max_dim), pygame.SRCALPHA)
 
-        # Draw shape onto surface
-        self._draw_shape(surface, type, temp_rect, color, **kwargs)
+        # Find offsets to center the shape inside the square
+        offset_x = (max_dim - size[0]) // 2
+        offset_y = (max_dim - size[1]) // 2
 
-        # Cache for reuse
-        self.images[cache_key] = surface
+        # Adjust rectangle to draw inside padded area
+        temp_rect = pygame.Rect(offset_x, offset_y, size[0], size[1])
 
-        DebugLogger.trace(f"Prebaked shape: {type} {size} {color}")
+        # Draw shape onto *square* surface
+        self._draw_shape(square_surface, type, temp_rect, color, **kwargs)
 
-        return surface
-
-    def create_triangle(self, size: int | tuple[int, int], color: tuple[int, int, int],
-                        pointing: str = "up") -> pygame.Surface:
-        """
-        Create a reusable triangle sprite (supports perfect equilateral geometry).
-
-        Args:
-            size (int|tuple): If int, creates equilateral triangle with 60° angles.
-                              If tuple (w,h), creates custom isosceles triangle.
-            color (tuple): RGB color.
-            pointing (str): "up", "down", "left", "right" (base orientation).
-
-        Returns:
-            pygame.Surface: Cached triangle image.
-        """
-        if isinstance(size, int):
-            w = size
-            h = int((math.sqrt(3) / 2) * w)  # 60° equilateral triangle height
-        else:
-            w, h = size
-
-        cache_key = f"triangle_{w}x{h}_{color}_{pointing}"
-        if cache_key in self.images:
-            return self.images[cache_key]
-
-        # Define points based on direction
-        if pointing == "up":
-            points = [(w // 2, 0), (0, h), (w, h)]
-        elif pointing == "down":
-            points = [(w // 2, h), (0, 0), (w, 0)]
-        elif pointing == "left":
-            points = [(0, h // 2), (w, 0), (w, h)]
-        elif pointing == "right":
-            points = [(w, h // 2), (0, 0), (0, h)]
-        else:
-            DebugLogger.warn(f"Invalid triangle direction '{pointing}', defaulting to 'up'")
-            points = [(w // 2, 0), (0, h), (w, h)]
-
-        surface = self.prebake_shape(
-            type="polygon",  # Changed from shape_type
-            size=(w, h),
-            color=color,
-            points=points
-        )
-        self.images[cache_key] = surface
-        return surface
+        # Cache and return
+        self.images[cache_key] = square_surface
+        return square_surface
 
     # ===========================================================
     # Rendering
@@ -308,59 +283,50 @@ class DrawManager:
             debug (bool): If True, logs the number of items rendered.
         """
         self.surface = target_surface
-        # -------------------------------------------------------
+
         # Background rendering (cached surface to avoid fill cost)
-        # -------------------------------------------------------
-        if hasattr(self, "background") and self.background is not None:
+        if self.background is not None:
             target_surface.blit(self.background, (0, 0))
         else:
-            target_surface.fill((50, 50, 100))  # fallback solid color
+            # Create cached background on first use
+            if not hasattr(self, "_bg_cache") or self._bg_cache is None:
+                self._bg_cache = pygame.Surface(target_surface.get_size())
+                self._bg_cache.fill((50, 50, 100))
+
+            target_surface.blit(self._bg_cache, (0, 0))
 
         # Cache sorted layer keys to avoid sorting every frame
         if self._layers_dirty:
-            self._layer_keys_cache = sorted(self.layers.keys())
+            # Combine all unique layers from both dictionaries
+            all_layers = set(self.surface_layers.keys()) | set(self.shape_layers.keys())
+            self._layer_keys_cache = sorted(all_layers)
             self._layers_dirty = False
 
-        # -------------------------------------------------------
-        # Render each layer (surfaces + shapes)
-        # -------------------------------------------------------
+        # Render each layer (surfaces then shapes)
         for layer in self._layer_keys_cache:
-            items = self.layers[layer]
-            if not items:
-                continue
+            # Batch blit all surfaces in this layer
+            if layer in self.surface_layers:
+                surface_items = self.surface_layers[layer]
+                if surface_items:
+                    target_surface.blits(surface_items)
 
-            # Detect if layer contains shape commands
-            shape_items = []
-            surface_items = []
-            for item in items:
-                if isinstance(item[0], str):
-                    shape_items.append(item)
-                elif isinstance(item[0], pygame.Surface):
-                    surface_items.append(item)
+            # Draw all shapes in this layer
+            if layer in self.shape_layers:
+                shape_items = self.shape_layers[layer]
+                for shape_type, rect, color, kwargs in shape_items:
+                    self._draw_shape(target_surface, shape_type, rect, color, **kwargs)
 
-            # Batch blit all standard surfaces in one call
-            if surface_items:
-                target_surface.blits(surface_items)
+        # Debug hitbox rendering (always last = always on top)
+        for rect, color, width in self.debug_hitboxes:
+            pygame.draw.rect(target_surface, color, rect, width)
 
-            # Draw primitive shapes (rects, circles, etc.)
-            for item in shape_items:
-                _, shape_type, rect, color, kwargs = item
-                self._draw_shape(target_surface, shape_type, rect, color, **kwargs)
+        for corners, color, width in self.debug_obbs:
+            pygame.draw.lines(target_surface, color, True, corners, width)
 
         if debug:
-            draw_count = sum(len(items) for items in self.layers.values())
-            DebugLogger.state(f"Rendered {draw_count} queued surfaces and shapes", category="drawing")
-
-        # -------------------------------------------------------
-        # Optional debug overlay pass (hitboxes)
-        # -------------------------------------------------------
-        if hasattr(self, "debug_hitboxes") and self.debug_hitboxes:
-            """
-            Directly draw debug hitboxes to avoid temporary surface allocation.
-            Each tuple: (rect, color, width)
-            """
-            for rect, color, width in self.debug_hitboxes:
-                pygame.draw.rect(target_surface, color, rect, width)
+            surface_count = sum(len(items) for items in self.surface_layers.values())
+            shape_count = sum(len(items) for items in self.shape_layers.values())
+            DebugLogger.state(f"Rendered {surface_count} surfaces and {shape_count} shapes", category="drawing")
 
     # ===========================================================
     # Shape Rendering Helper
@@ -371,24 +337,31 @@ class DrawManager:
         Internal helper for drawing primitive shapes on a surface.
 
         Args:
-            surface (pygame.Surface): Target surface to draw onto.
-            shape_type (str): Type of shape ("rect", "circle", "ellipse", etc.).
-            rect (pygame.Rect): Shape bounds.
-            color (tuple[int, int, int]): RGB color.
-            **kwargs: Optional keyword args (e.g., width, points, start_pos, end_pos).
+            surface: Target surface to draw onto
+            shape_type: "rect", "circle", "triangle", "polygon", etc.
+            rect: Shape bounds
+            color: RGB color
+            **kwargs: Shape-specific parameters
         """
         width = kwargs.get("width", 0)
 
-        if shape_type == "rect":
+        # Calculate points for polygon-based shapes
+        points = self._calculate_shape_points(shape_type, rect.width, rect.height, **kwargs)
+
+        if points:
+            # All polygon-based shapes (triangle, polygon, future shapes)
+            pygame.draw.polygon(surface, color, points, width)
+
+            # For DEBUG
+            # if shape_type == "triangle" and len(points) > 0:
+            #     tip = points[0]  # First point is the tip for "up" triangles
+            #     pygame.draw.circle(surface, (255, 255, 0), tip, 3)
+        elif shape_type == "rect":
             pygame.draw.rect(surface, color, rect, width)
         elif shape_type == "circle":
             pygame.draw.circle(surface, color, rect.center, rect.width // 2, width)
         elif shape_type == "ellipse":
             pygame.draw.ellipse(surface, color, rect, width)
-        elif shape_type == "polygon":
-            points = kwargs.get("points", [])
-            if points:
-                pygame.draw.polygon(surface, color, points, width)
         elif shape_type == "line":
             start = kwargs.get("start_pos")
             end = kwargs.get("end_pos")
@@ -396,3 +369,39 @@ class DrawManager:
                 pygame.draw.line(surface, color, start, end, width)
         else:
             DebugLogger.warn(f"Unknown shape type: {shape_type}")
+
+    def _calculate_shape_points(self, shape_type, w, h, **kwargs):
+        """
+        Centralized point calculation for all geometric shapes.
+        Returns None for shapes that don't use points (rect, circle, ellipse).
+
+        Args:
+            shape_type: "triangle", "polygon", etc.
+            w, h: Shape dimensions
+            **kwargs: Shape-specific params (pointing, points, etc.)
+
+        Returns:
+            list | None: Vertex points or None for non-polygon shapes
+        """
+        if shape_type == "triangle":
+            pointing = kwargs.get("pointing", "up")
+            if pointing == "up":
+                return [(w // 2, 0), (0, h), (w, h)]
+            elif pointing == "down":
+                return [(w // 2, h), (0, 0), (w, 0)]
+            elif pointing == "left":
+                return [(0, h // 2), (w, 0), (w, h)]
+            elif pointing == "right":
+                return [(w, h // 2), (0, 0), (0, h)]
+            else:
+                DebugLogger.warn(f"Invalid triangle direction '{pointing}', defaulting to 'up'")
+                return [(w // 2, 0), (0, h), (w, h)]
+
+        elif shape_type == "polygon":
+            # Custom points passed directly
+            return kwargs.get("points", [])
+
+        # Future shapes: hexagon, star, arrow, etc. go here
+
+        return None  # Non-polygon shapes (rect, circle, ellipse)
+

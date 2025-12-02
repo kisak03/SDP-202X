@@ -6,15 +6,16 @@ Player-specific animation definitions (Tier 2).
 All player animations centralized here for easy tuning.
 """
 
-from ..animation_effects.death_animation import death_fade
-from ..animation_effects.common_animation import blink, fade_color
+from src.graphics.animations.animation_effects.death_animation import death_fade
+from src.graphics.animations.animation_effects.common_animation import blink, fade_color
 from src.core.debug.debug_logger import DebugLogger
+from src.graphics.animations.animation_registry import register
 
 
 # ============================================================
 # Death Animations
 # ============================================================
-
+@register("player", "death")
 def death_player(entity, t):
     """
     Standard player death: fade out over 1 second.
@@ -29,12 +30,12 @@ def death_player(entity, t):
 # ============================================================
 # Damage Animations
 # ============================================================
-
+@register("player", "damage")
 def damage_player(entity, t):
     ctx = getattr(entity, 'anim_context', {})
     interval = ctx.get('blink_interval', 0.1)
-    previous_state = ctx.get('previous_state', entity._current_visual_state)
-    target_state = ctx.get('target_state', entity._current_visual_state)
+    previous_state = ctx.get('previous_state', entity._current_sprite)
+    target_state = ctx.get('target_state', entity._current_sprite)
 
     if entity.render_mode == "shape":
         start_color = entity.get_target_color(previous_state)
@@ -47,14 +48,12 @@ def damage_player(entity, t):
         )
 
         # Rebake shape with interpolated color
-        entity.refresh_visual(new_color=current_color)
+        entity.refresh_sprite(new_color=current_color)
 
         # Apply blink on top
         blink(entity, t, interval=interval)
     else:
         # Image mode - just blink (no color fade)
-        if not hasattr(entity, '_original_image'):
-            entity._original_image = entity.image.copy()
         blink(entity, t, interval=interval)
 
     # Cleanup at end

@@ -1,244 +1,236 @@
 """
 game_scene.py
 -------------
-Defines the main in-game scene — includes core gameplay entities_animation
-and the player HUD overlay.
-
-Responsibilities
-----------------
-- Initialize gameplay entities_animation (e.g., Player).
-- Update all active game logic each frame.
-- Manage the in-game UI system (HUDManager, overlays).
-- Forward input and events to appropriate subsystems.
+Main gameplay scene - runs active level with player, enemies, bullets.
 """
 
-import pygame
-
-# Core Systems
-from src.core.debug.debug_logger import DebugLogger
+from src.scenes.base_scene import BaseScene
+from src.systems.game_system_initializer import GameSystemInitializer
 from src.core.runtime.game_settings import Debug
-
-# Player Entity
-from src.entities.player.player_core import Player
-
-# UI Systems
-from src.ui.ui_manager import UIManager
-from src.ui.hud_manager import HUDManager
-
-# Combat Systems
-from src.systems.combat.bullet_manager import BulletManager
-from src.systems.collision.collision_manager import CollisionManager
-
-# Level and Spawn Systems
-from src.systems.level.spawn_manager import SpawnManager
-from src.systems.level.level_manager import LevelManager
-from src.systems.level.pattern_registry import PatternRegistry
+from src.core.debug.debug_logger import DebugLogger
+from src.entities.entity_state import LifecycleState
+from src.core.runtime.session_stats import update_session_stats
+from src.core.services.event_manager import get_events, EnemyDiedEvent
+from src.scenes.scene_state import SceneState
 
 
-class GameScene:
-    """Handles all gameplay entities_animation, logic, and UI systems."""
+class GameScene(BaseScene):
+    """Active gameplay scene."""
 
-    # ===========================================================
-    # Initialization
-    # ===========================================================
-    def __init__(self, scene_manager):
-        """
-        Initialize the game scene, UI, and entities_animation.
+    def __init__(self, services):
+        super().__init__(services)
+        self.input_context = "gameplay"
 
-        Args:
-            scene_manager: Reference to SceneManager for access to display,
-                           input, and draw subsystems.
-        """
-        DebugLogger.section("Initializing Scene: GameScene")
+        # Initialize all game systems
+        DebugLogger.section("Initializing GameScene")
+        initializer = GameSystemInitializer(services)
+        systems = initializer.initialize()
 
-        self.scene_manager = scene_manager
-        self.display = scene_manager.display
-        self.input_manager = scene_manager.input_manager
-        self.draw_manager = scene_manager.draw_manager
+        # Store system references
+        self.player = systems['player']
+        self.collision_manager = systems['collision_manager']
+        self.spawn_manager = systems['spawn_manager']
+        self.bullet_manager = systems['bullet_manager']
+        self.level_manager = systems['level_manager']
+        self.ui = systems['ui']
 
-        # UI System Setup
-        self.ui = UIManager(self.display, self.draw_manager)
+        # Campaign tracking
+        self.campaign = None
+        self.current_level_idx = 0
+        self.selected_level_id = None
 
-        # Base HUD (game overlay)
-        try:
-            self.ui.attach_subsystem("hud", HUDManager())
-        except Exception as e:
-            DebugLogger.fail(f"HUDManager unavailable: {e}")
+        # Game over state
+        self.game_over_shown = False
 
-        # spawn player
-        self.player = Player(draw_manager=self.draw_manager, input_manager=self.input_manager)
+        # Set callbacks
+        self.level_manager.on_level_complete = self._on_level_complete
+        get_events().subscribe(EnemyDiedEvent, self._on_enemy_died_stats)
 
-        # Bullet Manager Setup
-        self.bullet_manager = BulletManager()
+        DebugLogger.section("GameScene Initialized")
 
-        self.player.bullet_manager = self.bullet_manager
-        DebugLogger.init_sub("Connected [Player] → [BulletManager]")
+    def on_load(self, campaign_name=None, level_id=None, **scene_data):
+        """Load campaign when scene is created."""
+        # Store specific level to load
+        self.selected_level_id = level_id
 
-        # Collision Manager Setup
-        self.collision_manager = CollisionManager(
-            self.player,
-            self.bullet_manager,
-            None
-        )
+        # Load campaign from registry
+        level_registry = self.services.get_global("level_registry")
 
-        self.bullet_manager.collision_manager = self.collision_manager
-        DebugLogger.init_sub("Bound [CollisionManager] to [BulletManager]")
+        if campaign_name:
+            self.campaign = level_registry.get_campaign(campaign_name)
+            if self.campaign:
+                DebugLogger.init_sub(f"Loaded campaign: {campaign_name} ({len(self.campaign)} levels)")
+            else:
+                DebugLogger.warn(f"Campaign '{campaign_name}' not found")
+                self.campaign = []
+        else:
+            # Default campaign
+            self.campaign = level_registry.get_campaign("test")
+            if self.campaign:
+                DebugLogger.init_sub(f"Loaded default campaign: test ({len(self.campaign)} levels)")
+            else:
+                self.campaign = []
 
-        # Register player's hitbox through the CollisionManager
-        self.player.hitbox = self.collision_manager.register_hitbox(
-            self.player,
-            scale=self.player.hitbox_scale
-        )
-        DebugLogger.init_sub("Registered [Player] with [CollisionManager]")
-        DebugLogger.warn(f"Player hitbox owner ID: {id(self.player.hitbox.owner)}")
+    def on_enter(self):
+        """Start first level when scene becomes active."""
+        level_registry = self.services.get_global("level_registry")
 
-        # ===========================================================
-        # Spawn Manager Setup
-        # ===========================================================
-        self.spawn_manager = SpawnManager(self.draw_manager, self.display, self.collision_manager)
-        DebugLogger.warn(f"Player created. Is it in spawn_manager? {self.player in self.spawn_manager.entities}")
+        # Load HUD
+        self.ui.load_hud("hud/gameplay_hud.yaml")
 
-        self.collision_manager.spawn_manager = self.spawn_manager
+        # Load game over overlay (hidden by default)
+        self.ui.load_screen("game_over", "hud/game_over.yaml")
 
-        self.spawn_manager.enable_pooling("enemy", "straight", prewarm_count=10)
+        # Reset game state
+        self.game_over_shown = False
+        update_session_stats().reset()
 
-        # ===========================================================
-        # Level Manager Setup
-        # ===========================================================
-        self.level_manager = LevelManager(self.spawn_manager)
-        self.level_manager.on_stage_complete = self._on_stage_complete
+        # Start specific level if selected
+        if self.selected_level_id:
+            level_config = level_registry.get(self.selected_level_id)
+            if level_config:
+                DebugLogger.state(f"Starting level: {level_config.name}")
+                self.level_manager.load(level_config.path)
+                return
 
-        self.stage_queue = [
-            "src/data/Stage 1.json",
-            "src/data/Stage 2.json",
-            "src/data/Stage 3.json"
-        ]
-        self.current_stage_idx = 0
+        # Otherwise start first level in campaign
+        if self.campaign and len(self.campaign) > 0:
+            first_level = self.campaign[0]
+            DebugLogger.state(f"Starting level: {first_level.name}")
+            self.level_manager.load(first_level.path)
+        else:
+            # Fallback to default start level
+            start_level = level_registry.get_default_start()
+            if start_level:
+                DebugLogger.state(f"Starting level: {start_level.name}")
+                self.level_manager.load(start_level.path)
 
-        DebugLogger.section("- Finished Initialization", only_title=True)
-        DebugLogger.section("─" * 59 + "\n", only_title=True)
+    def on_exit(self):
+        """Clean up when leaving gameplay."""
+        # Clear HUD
+        self.ui.clear_hud()
 
-        self.paused = False
+    def on_pause(self):
+        """Show pause overlay."""
+        self.ui.show_screen("pause", modal=True)
 
-    # ===========================================================
-    # Event Handling
-    # ===========================================================
-    def handle_event(self, event):
-        """
-        Forward input and system events to UI and entities_animation.
+    def on_resume(self):
+        """Hide pause overlay."""
+        self.ui.hide_screen("pause")
 
-        Args:
-            event (pygame.event.Event): The event to process.
-        """
-        self.ui.handle_event(event)
-
-    # ===========================================================
-    # Update Logic
-    # ===========================================================
     def update(self, dt: float):
-        """
-        Update gameplay logic and UI each frame.
-
-        Args:
-            dt (float): Delta time (in seconds) since the last frame.
-        """
-
-        if self.paused:
+        """Update all game systems."""
+        # Check for player death
+        if not self.game_over_shown and self.player.death_state == LifecycleState.DEAD:
+            self._show_game_over(victory=False)
             return
 
-        # 1) Player Input & Update
-        move = self.input_manager.get_normalized_move()
-        self.player.move_vec = move
+        # Don't update gameplay if game over is shown
+        if self.game_over_shown:
+            mouse_pos = self.input_manager.get_mouse_pos()
+            self.ui.update(dt, mouse_pos)
+            return
 
-        # 2. Single entity pass (combines spawn + level logic)
-        self.spawn_manager.update(dt)  # Updates entities_animation
-        self.level_manager.update(dt)  # Only checks timers/waves
+        # Don't update gameplay or track time if paused
+        if self.state == SceneState.PAUSED:
+            mouse_pos = self.input_manager.get_mouse_pos()
+            self.ui.update(dt, mouse_pos)
+            return
 
-        # 3. Physics
+        # Track play time (only during active gameplay)
+        update_session_stats().add_time(dt)
+
+        # Core gameplay updates
         self.player.update(dt)
-
-        # 4. Projectiles
+        self.spawn_manager.update(dt)
         self.bullet_manager.update(dt)
+        self.level_manager.update(dt)
 
-        # 5. Collision
+        # Collision detection
         self.collision_manager.update()
         self.collision_manager.detect()
 
-        # 6. Cleanup
+        # Cleanup dead entities
         self.spawn_manager.cleanup()
 
-        # 7. UI
-        self.ui.update(pygame.mouse.get_pos())
+        # UI update
+        mouse_pos = self.input_manager.get_mouse_pos()
+        self.ui.update(dt, mouse_pos)
 
-        # if not self.level_manager.active:  # when current stage finishes
-        #     next_stage = self._get_next_stage()
-        #     if next_stage:
-        #         DebugLogger.state(f"Loading next stage: {next_stage}")
-        #         self.level_manager.load(next_stage)
-        #     else:
-        #         DebugLogger.system("All stages complete — GameScene finished")
-
-    def _on_stage_complete(self):
-        """Callback fired by LevelManager when stage ends."""
-        DebugLogger.system(f"Stage {self.current_stage_idx + 1} complete")
-
-        self.spawn_manager.reset()
-
-        # self.spawn_manager.cleanup()  # Clear all entities_animation
-        self.current_stage_idx += 1
-
-        if self.current_stage_idx < len(self.stage_queue):
-            next_stage = self.stage_queue[self.current_stage_idx]
-            DebugLogger.state(f"Loading: {next_stage}")
-            self.level_manager.load(next_stage)
-        else:
-            DebugLogger.system("All stages complete")
-
-    # ===========================================================
-    # Rendering
-    # ===========================================================
     def draw(self, draw_manager):
-        """
-        Render all entities_animation and UI elements to the draw queue.
-
-        Args:
-            draw_manager (DrawManager): Centralized renderer responsible for batching and displaying.
-        """
-        # Rendering Order (Layer Priority)
+        """Render all game elements."""
+        # Entities
+        self.player.draw(draw_manager)
         self.spawn_manager.draw()
         self.bullet_manager.draw(draw_manager)
-        self.player.draw(draw_manager)
+
+        # UI/HUD
         self.ui.draw(draw_manager)
 
-        # Optional Debug Rendering
+        # Debug overlays
         if Debug.HITBOX_VISIBLE:
             self.collision_manager.draw_debug(draw_manager)
 
-    # ===========================================================
-    # Utilities
-    # ===========================================================
-    def get_pool_stats(self) -> dict:
-        """Return current pool usage statistics."""
-        stats = {}
-        return self.spawn_manager.get_pool_stats()
+    def handle_event(self, event):
+        """Handle input events."""
+        action = self.ui.handle_event(event)
 
-    # ===========================================================
-    # Lifecycle Hooks
-    # ===========================================================
-    def on_enter(self):
-        DebugLogger.state("on_enter()")
-        self.level_manager.load("levels/Stage 1.json")
+        if action == "resume":
+            self.scene_manager.resume_active_scene()
+        elif action == "quit":
+            self.scene_manager.set_scene("MainMenu")
+        elif action == "return_to_menu":
+            self.scene_manager.set_scene("MainMenu")
 
-    def on_exit(self):
-        DebugLogger.state("on_exit()")
+    def _on_level_complete(self):
+        """Called when level is completed."""
+        if not self.game_over_shown:
+            self._show_game_over(victory=True)
 
-    def on_pause(self):
-        self.paused = True
-        self.level_manager.active = False
-        DebugLogger.state("on_pause()")
+    def _on_enemy_died_stats(self, event):
+        """Track enemy kills in session stats."""
+        update_session_stats().add_kill()
+        update_session_stats().add_score(10)  # Base score per kill
 
-    def on_resume(self):
-        DebugLogger.state("on_resume()")
+    def _show_game_over(self, victory: bool):
+        """Show game over overlay with stats."""
+        self.game_over_shown = True
 
-    def reset(self):
-        DebugLogger.state("reset()")
+        # Update title
+        title_elem = self.ui.find_element_by_id("game_over", "title_label")
+        if title_elem:
+            if victory:
+                title_elem.text = "MISSION ACCOMPLISHED"
+                title_elem.text_color = (100, 255, 100)
+            else:
+                title_elem.text = "GAME OVER"
+                title_elem.text_color = (255, 100, 100)
+            title_elem.mark_dirty()
+
+        # Update stats
+        score_elem = self.ui.find_element_by_id("game_over", "score_label")
+        if score_elem:
+            score_elem.text = f"Score: {update_session_stats().score}"
+            score_elem.mark_dirty()
+
+        kills_elem = self.ui.find_element_by_id("game_over", "kills_label")
+        if kills_elem:
+            kills_elem.text = f"Enemies Killed: {update_session_stats().enemies_killed}"
+            kills_elem.mark_dirty()
+
+        items_elem = self.ui.find_element_by_id("game_over", "items_label")
+        if items_elem:
+            items_elem.text = f"Items Collected: {update_session_stats().items_collected}"
+            items_elem.mark_dirty()
+
+        time_elem = self.ui.find_element_by_id("game_over", "time_label")
+        if time_elem:
+            minutes = int(update_session_stats().run_time // 60)
+            seconds = int(update_session_stats().run_time % 60)
+            time_elem.text = f"Time: {minutes}:{seconds:02d}"
+            time_elem.mark_dirty()
+
+        # Show overlay
+        self.ui.show_screen("game_over", modal=True)
+
+        DebugLogger.state(f"Game over shown (victory={victory})", category="game")

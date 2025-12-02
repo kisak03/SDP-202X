@@ -1,447 +1,192 @@
 """
 level_manager.py
 ----------------
-Phase-based level controller with wave scheduling and scripted events.
+Lightweight coordinator for stage-based level progression.
 
 Architecture
 ------------
-Single-file modular design:
-- PhaseController: Current phase state
-- WaveScheduler: Enemy spawn timing (O(1) per frame)
-- EventScheduler: Scripted event timing (O(1) per frame)
-- TriggerEvaluator: Phase completion checks (O(1) or lazy)
+Delegates to specialized subsystems:
+- StageLoader: Level data and stage management
+- WaveScheduler: Wave spawning and timing
 
-Performance
------------
-Hot path (every frame): ~0.04ms
-- Wave check: O(1) index pointer
-- Event check: O(1) index pointer
-- Trigger check: O(1) or skipped if not phase-ending
-
-Cold path (phase transitions): ~0.8ms
-- Only runs 3-5 times per level
-- Loads new wave/event arrays
-
-Data Format
------------
-Supports both legacy Python dicts and JSON files:
-- Legacy: STAGE_1_WAVES = [{"spawn_time": 0.0, ...}]
-- JSON: {"phases": [{"waves": [...], "events": [...]}]}
+Responsibilities
+----------------
+- Coordinate subsystem updates
+- Handle stage transitions
+- Provide unified API for game scene
 """
 
-import os
-from src.core.services.config_manager import load_config
 from src.core.debug.debug_logger import DebugLogger
-from src.entities.entity_state import EntityCategory
-from src.systems.level.pattern_registry import PatternRegistry
+from src.systems.level.stage_loader import StageLoader
+from src.systems.level.wave_scheduler import WaveScheduler
 
 
 class LevelManager:
     """
-    Phase-based level coordinator.
+    Lightweight coordinator for stage-based level progression.
 
-    Handles multiphase levels with waves, events, and conditional triggers.
-    Backward compatible with single-phase legacy format.
+    Delegates heavy lifting to StageLoader and WaveScheduler.
     """
 
-    def __init__(self, spawn_manager):
+    def __init__(self, spawn_manager, player_ref=None):
         """
-        Initialize level manager.
+        Initialize level manager and subsystems.
 
         Args:
             spawn_manager: SpawnManager instance for entity creation
-            level_data: Either:
-                - str: Path to JSON level file
-                - list: Legacy wave data [{"spawn_time": ...}]
-                - dict: Full level data {"phases": [...]}
+            player_ref: Player entity reference for targeting
         """
         DebugLogger.init_entry("LevelManager Initialized")
 
-        self.spawner = spawn_manager
-        self.spawner.on_entity_destroyed = self._on_entity_destroyed
+        if player_ref is None:
+            DebugLogger.warn(
+                "[LevelManager] No player_ref provided - homing enemies will default to center targeting",
+                category="level"
+            )
 
-        # State
-        self.data = None
-        self.phases = []
-        self.current_phase_idx = 0
-        self.phase_timer = 0.0
-        self._waiting_for_clear = False
-        self._remaining_enemies = 0
-        self.active = False
-
-        self.waves = []
-        self.wave_idx = 0
-        self.events = []
-        self.event_idx = 0
-        self.exit_trigger = None
-        self._trigger_func = lambda: False
+        # Initialize subsystems
+        self.stage_loader = StageLoader(spawn_manager)
+        self.wave_scheduler = WaveScheduler(spawn_manager, player_ref)
 
         # Callback
-        self.on_stage_complete = None
+        self.on_level_complete = None
 
     # ===========================================================
-    # Data Loading
+    # Loading
     # ===========================================================
 
     def load(self, level_path: str):
-        """Load level data and initialize first phase."""
-
-        self.data = self._load_level_data(level_path)
-        self.phases = self.data.get("phases", [])
-
-        # Full reset
-        self.current_phase_idx = 0
-        self.phase_timer = 0.0
-        self._waiting_for_clear = False
-        self._remaining_enemies = 0
-        self.active = True
-
-        if not self.phases:
-            DebugLogger.warn("No phases in level")
-            return
-
-        self._load_phase(0)
-
-    def _load_level_data(self, level_data):
         """
-        Load and normalize level data from various sources.
-
-        Returns:
-            dict: Normalized level data with "phases" array
-        """
-        # Case 1: JSON or Python file path
-        if isinstance(level_data, str):
-            data = load_config(level_data, {"phases": []})
-            DebugLogger.init_sub(f"Level Loaded: {os.path.basename(level_data)}")
-            return data
-
-        # Case 2: Already a dict
-        if isinstance(level_data, dict):
-            return level_data
-
-        DebugLogger.warn(f"Invalid level_data type: {type(level_data)}")
-        return {"phases": []}
-
-    # ===========================================================
-    # Phase Management
-    # ===========================================================
-
-    def _load_phase(self, phase_idx):
-        """
-        Load wave and event data for a specific phase.
+        Load level and initialize first stage.
 
         Args:
-            phase_idx (int): Index in self.phases array
+            level_path: Path to level JSON file
         """
-        if phase_idx >= len(self.phases):
-            self.active = False
-            DebugLogger.system("Level complete - all phases finished")
+        if not level_path or not isinstance(level_path, str):
+            DebugLogger.warn(
+                f"[LevelManager] Invalid level_path: {level_path}",
+                category="level"
+            )
             return
 
-        phase = self.phases[phase_idx]
-        phase_name = phase.get("name", phase.get("id", f"phase_{phase_idx}"))
+        self.stage_loader.load(level_path)
 
-        DebugLogger.section(f"[ PHASE {phase_idx + 1}/{len(self.phases)} START ]: {phase_name}")
+        if not self.stage_loader.stages:
+            DebugLogger.warn(
+                f"[LevelManager] No stages loaded from {level_path}",
+                category="level"
+            )
+            return
 
-        # Load waves (sorted by time)
-        self.waves = sorted(phase.get("waves", []), key=lambda w: w.get("time", 0))
-        self.wave_idx = 0
+        self._load_stage(0)
 
-        # Load events (sorted by time)
-        self.events = sorted(phase.get("events", []), key=lambda e: e.get("time", 0))
-        self.event_idx = 0
+    def _load_stage(self, stage_idx: int):
+        """
+        Load specific stage into subsystems.
 
-        # Reset phase timer
-        self.phase_timer = 0.0
+        Args:
+            stage_idx: Stage index to load
+        """
+        if stage_idx >= len(self.stage_loader.stages):
+            self.stage_loader.active = False
+            DebugLogger.system("Level complete - all stages finished", category="level")
+            return
 
-        # Store exit trigger for this phase
-        self.exit_trigger = phase.get("exit_trigger", "all_waves_cleared")
+        stage = self.stage_loader.stages[stage_idx]
+        stage_name = stage.get("name", f"Stage {stage_idx + 1}")
 
-        # Detailed initialization sublines
-        DebugLogger.init_sub(f"Waves: {len(self.waves)}, Events: {len(self.events)}")
-        DebugLogger.init_sub(f"Exit Trigger: {self.exit_trigger}")
-        DebugLogger.init_sub(f"Timer Reset → {self.phase_timer:.2f}s")
+        DebugLogger.section(
+            f"[ STAGE {stage_idx + 1}/{len(self.stage_loader.stages)} START ]: {stage_name}"
+        )
+
+        # Parse and load waves
+        waves = self.stage_loader.parse_timeline(stage)
+        self.wave_scheduler.load_waves(waves)
+
+        # Load trigger
+        self.stage_loader.load_trigger(stage)
+
+        # Enable enemy tracking if needed
+        if self.stage_loader.exit_trigger == "all_waves_cleared":
+            self.wave_scheduler.enable_wave_clear_tracking()
+
+        # Reset stage timer
+        self.stage_loader.stage_timer = 0.0
+
+        # Log stage info
+        DebugLogger.init_sub(f"Waves: {len(waves)}, Events: 0")
+        DebugLogger.init_sub(f"Exit Trigger: {self.stage_loader.exit_trigger}")
+        DebugLogger.init_sub(f"Timer Reset → {self.stage_loader.stage_timer:.2f}s")
         DebugLogger.section("─" * 59 + "\n", only_title=True)
 
-        self._trigger_func = self._compile_trigger(self.exit_trigger)
-
-    def _compile_trigger(self, trigger):
-        """Return callable that checks completion"""
-
-        # Time-based
-        if trigger == "duration":
-            duration = self.phases[self.current_phase_idx].get("duration", float('inf'))
-            return lambda: self.phase_timer >= duration
-
-        # Event-driven wave clear
-        if trigger == "all_waves_cleared":
-            self._waiting_for_clear = True
-            self._remaining_enemies = 0  # Will be counted on spawn
-            return lambda: (self.wave_idx >= len(self.waves) and
-                            self._remaining_enemies <= 0)
-
-        # Polling-based (legacy fallback)
-        if trigger == "enemy_cleared":
-            return lambda: not self._has_enemies_alive()
-
-        # Complex triggers
-        if isinstance(trigger, dict):
-            return lambda: self._evaluate_complex_trigger(trigger)
-
-        # Fallback
-        DebugLogger.warn(f"Unknown trigger type: {trigger}")
-        return lambda: False
-
-    def _next_phase(self):
-        """Advance to the next phase."""
-        self.current_phase_idx += 1
-
-        if self.current_phase_idx < len(self.phases):
-            self._load_phase(self.current_phase_idx)
-        else:
-            # Stage fully complete
-            self.active = False
-            DebugLogger.system("Stage complete")
-
-            if self.on_stage_complete:
-                self.on_stage_complete()
-
     # ===========================================================
-    # Update Loop (Hot Path)
+    # Update Loop
     # ===========================================================
 
-    def update(self, dt):
+    def update(self, dt: float):
         """
-        Update wave spawning, events, and phase progression.
-
-        Performance: ~0.04ms per frame
+        Update all subsystems.
 
         Args:
-            dt (float): Delta time in seconds
+            dt: Delta time in seconds
         """
-        if not self.active:
+        if not self.stage_loader.active:
             return
 
-        if not hasattr(self, 'waves'):
-            return
+        # Update timer
+        self.stage_loader.update_timer(dt)
 
-        self.phase_timer += dt
+        # Update wave spawning
+        self.wave_scheduler.update(dt, self.stage_loader.stage_timer)
 
-        # Only check waves if any remain
-        if self.wave_idx < len(self.waves):
-            self._update_waves()
-
-        # Only check events if any remain
-        if self.event_idx < len(self.events):
-            self._update_events()
-
-        # Only check trigger if conditions met
+        # Check stage completion
         if self._should_check_trigger():
-            if self._trigger_func():
-                self._next_phase()
+            if self._check_trigger():
+                self._next_stage()
 
-    def _update_waves(self):
-        """Spawn waves when their time arrives."""
-        while (self.wave_idx < len(self.waves) and
-               self.phase_timer >= self.waves[self.wave_idx].get("time", 0)):
-            self._trigger_wave(self.waves[self.wave_idx])
-            self.wave_idx += 1
+    def _should_check_trigger(self) -> bool:
+        """Determine if trigger should be evaluated."""
+        waves_complete = self.wave_scheduler.is_waves_complete()
+        return self.stage_loader.should_check_trigger(waves_complete)
 
-    def _update_events(self):
-        """Trigger events when their time arrives."""
-        while (self.event_idx < len(self.events) and
-               self.phase_timer >= self.events[self.event_idx].get("time", 0)):
-            self._trigger_event(self.events[self.event_idx])
-            self.event_idx += 1
+    def _check_trigger(self) -> bool:
+        """Check if stage completion trigger is satisfied."""
+        waves_complete = self.wave_scheduler.is_waves_complete()
+        remaining_enemies = self.wave_scheduler.get_remaining_enemies()
+        return self.stage_loader.check_trigger(waves_complete, remaining_enemies)
 
     # ===========================================================
-    # Wave Spawning
+    # Stage Transitions
     # ===========================================================
 
-    def _trigger_wave(self, wave):
-        """
-        Spawn enemies for a wave using PatternRegistry.
-
-        Args:
-            wave (dict): Wave configuration
-                {
-                    "enemy": "straight",
-                    "count": 5,
-                    "pattern": "line",
-                    "pattern_params": {...},
-                    "enemy_params": {...}
-                }
-        """
-
-        enemy_type = wave.get("enemy", "straight")
-        count = wave.get("count", 1)
-        pattern = wave.get("pattern", "line")
-
-        # Get spawn positions from pattern
-        width = getattr(self.spawner.display, "game_width", 1280)
-        pattern_params = wave.get("pattern_params", {})
-
-        positions = PatternRegistry.get_positions(
-            pattern, count, width, **pattern_params
-        )
-
-        # Spawn enemies at each position
-        enemy_params = wave.get("enemy_params", {})
-
-        spawned = 0
-        for x, y in positions:
-            enemy = self.spawner.spawn("enemy", enemy_type, x, y, **enemy_params)
-            if enemy:
-                spawned += 1
-                # Apply per-wave speed override if specified
-                if "speed" in enemy_params:
-                    enemy.speed = enemy_params["speed"]
-
-        if self._waiting_for_clear:
-            self._remaining_enemies += spawned
-
-        DebugLogger.state(
-            f"Wave: {enemy_type} x{count} | Pattern: {pattern}",
-            category="stage"
-        )
-
-    def _on_entity_destroyed(self, entity):
-        """Called by SpawnManager when entity dies"""
-        if not self._waiting_for_clear or not self.active:
-            return
-
-        if entity.category == EntityCategory.ENEMY:
-            self._remaining_enemies -= 1
-
-            if self._remaining_enemies == 0 and self.wave_idx >= len(self.waves):
-                self._waiting_for_clear = False
-                self._next_phase()
-
-    # ===========================================================
-    # Event System (Dummy Handlers)
-    # ===========================================================
-
-    def _trigger_event(self, event):
-        """
-        Execute a scripted event.
-
-        Args:
-            event (dict): Event configuration
-                {
-                    "type": "music" | "dialogue" | "spawn_hazard",
-                    "params": {...}
-                }
-        """
-        event_type = event.get("type")
-        params = event.get("params", {})
-
-        # Dispatch to handler
-        handler = self._get_event_handler(event_type)
-        if handler:
-            handler(params)
+    def _next_stage(self):
+        """Advance to next stage or complete level."""
+        if self.stage_loader.has_next_stage():
+            self.stage_loader.advance_stage()
+            self._load_stage(self.stage_loader.current_stage_idx)
         else:
-            DebugLogger.warn(f"No handler for event type: {event_type}")
+            # Level complete
+            self.stage_loader.active = False
+            DebugLogger.system("Level complete", category="level")
 
-    def _get_event_handler(self, event_type):
-        """
-        Get handler function for event type.
-
-        Uses dispatch table for O(1) lookup.
-        """
-        handlers = {
-            "music": self._event_music,
-            "dialogue": self._event_dialogue,
-            "spawn_hazard": self._event_spawn_hazard,
-            "environment": self._event_environment,
-        }
-        return handlers.get(event_type)
-
-    # Event handlers (dummy implementations with hooks for future systems)
-
-    def _event_music(self, params):
-        pass
-
-    def _event_dialogue(self, params):
-        pass
-
-    def _event_spawn_hazard(self, params):
-        pass
-
-    def _event_environment(self, params):
-        pass
+            if self.on_level_complete:
+                self.on_level_complete()
 
     # ===========================================================
-    # Trigger Evaluation (Phase Completion)
+    # Properties (for backward compatibility)
     # ===========================================================
 
-    def _evaluate_complex_trigger(self, trigger):
-        """
-        Evaluate complex condition-based triggers.
+    @property
+    def active(self) -> bool:
+        """Check if level is active."""
+        return self.stage_loader.active
 
-        Args:
-            trigger (dict): Trigger configuration
-                {
-                    "type": "enemy_category_cleared",
-                    "category": "miniboss"
-                }
-        """
-        trigger_type = trigger.get("type")
+    @property
+    def stage_timer(self) -> float:
+        """Get current stage timer."""
+        return self.stage_loader.stage_timer
 
-        if trigger_type == "enemy_category_cleared":
-            category = trigger.get("category")
-            return not self._has_category_alive(category)
-
-        if trigger_type == "boss_defeated":
-            boss_id = trigger.get("boss_id")
-            # Check if specific boss entity is dead
-            return not self._has_boss_alive(boss_id)
-
-        if trigger_type == "timer":
-            min_time = trigger.get("min", 0.0)
-            max_time = trigger.get("max", float('inf'))
-            return min_time <= self.phase_timer <= max_time
-
-        DebugLogger.warn(f"Unknown complex trigger: {trigger_type}")
-        return False
-
-    # ===========================================================
-    # Entity Query Helpers (Lazy Evaluation)
-    # ===========================================================
-
-    def _has_enemies_alive(self):
-        """Check if any ENEMY category entities_animation exist."""
-        return any(
-            getattr(e, "category", None) == EntityCategory.ENEMY
-            for e in self.spawner.entities
-        )
-
-    def _has_category_alive(self, category):
-        """Check if specific category entities_animation exist."""
-        return any(
-            getattr(e, "category", None) == category
-            for e in self.spawner.entities
-        )
-
-    def _has_boss_alive(self, boss_id):
-        """Check if specific boss entity exists."""
-        # Requires boss entities_animation to have "boss_id" attribute
-        return any(
-            getattr(e, "boss_id", None) == boss_id
-            for e in self.spawner.entities
-        )
-
-    def _should_check_trigger(self):
-        """Only check trigger when waves are done or time-based."""
-        trigger = self.exit_trigger
-
-        if trigger == "duration":
-            return True
-
-        if trigger in ("all_waves_cleared", "enemy_cleared"):
-            return self.wave_idx >= len(self.waves)
-
-        # Complex triggers always check (they handle their own conditions)
-        if isinstance(trigger, dict):
-            return True
-
-        return False
+    @property
+    def current_stage_idx(self) -> int:
+        """Get current stage index."""
+        return self.stage_loader.current_stage_idx

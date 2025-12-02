@@ -1,4 +1,4 @@
-name: Validate PR Release Label
+name: check-pr-label
 on:
   pull_request:
     branches: [main]

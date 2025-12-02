@@ -11,6 +11,7 @@ Responsibilities
 - Automatically link new entities to collision systems (if provided).
 - Handle per-frame update and render passes for all active entities.
 """
+
 from src.core.debug.debug_logger import DebugLogger
 from src.systems.entity_management.entity_registry import EntityRegistry
 from src.entities.entity_state import LifecycleState
@@ -43,6 +44,7 @@ class SpawnManager:
         self.collision_manager = collision_manager
         self.entities = []  # Active entities
         self._alive_cache = []  # Cache for alive entities (updated per frame)
+        self._effects_manager = None
         self.on_entity_destroyed = None
 
         # Pooling system
@@ -57,6 +59,7 @@ class SpawnManager:
             "pooled_spawns": 0,
             "new_spawns": 0
         }
+        self._alive_cache_dirty = True
 
         DebugLogger.init_entry("SpawnManager Initialized")
 
@@ -145,6 +148,8 @@ class SpawnManager:
         Spawn a new entity and register it with the scene.
         """
         key = (category, type_name)
+
+        self._alive_cache_dirty = True
 
         if key not in self._validated_types:
             if not self._validate_entity_type(category, type_name, x, y):
@@ -282,7 +287,7 @@ class SpawnManager:
 
     def _return_to_pool(self, entity):
         """Return entity to its pool if pooling is enabled for its type."""
-        category = getattr(entity, "category", None)
+        category = entity.category
         type_name = self._get_entity_type_name(entity)
 
         if not category or not type_name:
@@ -322,7 +327,9 @@ class SpawnManager:
         Args:
             dt (float): Delta time since last frame (in seconds).
         """
-        self._alive_cache = [e for e in self.entities if e.death_state < LifecycleState.DEAD]
+        if self._alive_cache_dirty:
+            self._alive_cache = [e for e in self.entities if e.death_state < LifecycleState.DEAD]
+            self._alive_cache_dirty = False
 
         for entity in self._alive_cache:
             entity.update(dt)
@@ -386,7 +393,11 @@ class SpawnManager:
         del self.entities[i:]
         removed = total_before - i
 
+        # Rebuild cache immediately if entities were removed
         if removed > 0:
+            self._alive_cache = [e for e in self.entities if e.death_state < LifecycleState.DEAD]
+            self._alive_cache_dirty = False
+
             DebugLogger.state(
                 f"Cleaned up {removed} entities ({returned_to_pool} pooled, {destroyed} destroyed)",
                 category="entity_cleanup"
@@ -398,12 +409,12 @@ class SpawnManager:
 
     def get_entities_by_category(self, category):
         """Get all entities matching a specific category."""
-        return [e for e in self.entities if getattr(e, "category", None) == category]
+        return [e for e in self.entities if e.category == category]
 
     def cleanup_by_category(self, category):
         """Remove all entities of a specific category."""
         before = len(self.entities)
-        self.entities = [e for e in self.entities if getattr(e, "category", None) != category]
+        self.entities = [e for e in self.entities if e.category != category]
         removed = before - len(self.entities)
 
         if removed > 0:
@@ -439,7 +450,7 @@ class SpawnManager:
 
         # Count entities by category
         for entity in self.entities:
-            category = getattr(entity, "category", "unknown")
+            category = entity.category
             stats["entities_by_category"][category] = \
                 stats["entities_by_category"].get(category, 0) + 1
 
@@ -467,6 +478,6 @@ class SpawnManager:
             self._return_to_pool(entity)
 
         self.entities.clear()
-        # Note: Keep _validated_types - entity classes don't change between levels
+        # Note: Keep _validated_types - entity classes don't change between missions
         # Clear only if you want to re-validate (e.g., for hot-reload debugging)
         DebugLogger.system("SpawnManager reset (pools preserved)", category="entity_spawn")

@@ -42,5 +42,8 @@ class CollisionTags:
     ENEMY_BULLET = "enemy_bullet"
 
     PICKUP = "pickup"
+
     HAZARD = "hazard"
     ENVIRONMENT = "environment"
+
+    SHIELD = "shield"

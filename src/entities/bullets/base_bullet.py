@@ -12,12 +12,16 @@ Responsibilities
 """
 
 import pygame
+
 from src.core.runtime import game_settings
 from src.core.runtime.game_settings import Bounds
+
 from src.core.debug.debug_logger import DebugLogger
+
 from src.entities.base_entity import BaseEntity
 from src.entities.entity_state import LifecycleState, InteractionState
 from src.entities.entity_types import EntityCategory, CollisionTags
+
 from src.systems.entity_management.entity_registry import EntityRegistry
 
 
@@ -57,7 +61,14 @@ class BaseBullet(BaseEntity):
         # Load defaults from JSON
         if BaseBullet._cached_defaults is None:
             BaseBullet._cached_defaults = EntityRegistry.get_data("projectile", "straight")
+
         defaults = BaseBullet._cached_defaults
+        if not defaults:
+            DebugLogger.fail(
+                "bullets.json not loaded or missing 'straight' definition",
+                category="loading"
+            )
+            raise ValueError("BaseBullet requires bullets.json with 'straight' definition")
 
         # Apply overrides or use defaults
         damage = damage if damage is not None else defaults.get("damage", 1)
@@ -99,6 +110,9 @@ class BaseBullet(BaseEntity):
         self.category = EntityCategory.PROJECTILE
         self.layer = game_settings.Layers.BULLETS
 
+        # Enable rotation for image bullets (shapes don't need rotation)
+        self._rotation_enabled = (image is not None)
+
     # ===========================================================
     # Update Logic
     # ===========================================================
@@ -108,6 +122,7 @@ class BaseBullet(BaseEntity):
 
         Responsibilities:
             - Move the bullet according to its velocity.
+            - Rotate to face movement direction (image bullets only).
             - Sync its rect and hitbox.
             - (Offscreen cleanup handled by BulletManager.)
         """
@@ -116,6 +131,9 @@ class BaseBullet(BaseEntity):
 
         self.pos.x += self.vel.x * dt
         self.pos.y += self.vel.y * dt
+
+        # Rotate bullet to face movement direction (inherited from BaseEntity)
+        self.update_rotation(velocity=self.vel)
 
         # Sync its rect and hitbox using the inherited helper method
         self.sync_rect()
@@ -168,13 +186,13 @@ class BaseBullet(BaseEntity):
     # ===========================================================
     # Rendering
     # ===========================================================
-    def draw(self, draw_manager):
-        """
-        Render the bullet on screen.
-
-        Draws either an image or fallback circle based on render mode.
-        """
-        super().draw(draw_manager)
+    # def draw(self, draw_manager):
+    #     """
+    #     Render the bullet on screen.
+    #
+    #     Draws either an image or fallback circle based on render mode.
+    #     """
+    #     super().draw(draw_manager)
 
     # ===========================================================
     # Reset for Object Pooling

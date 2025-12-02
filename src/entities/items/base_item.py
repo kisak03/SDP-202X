@@ -14,13 +14,20 @@ Responsibilities
 import pygame
 import random
 import math
+
 from src.core.runtime.game_settings import Display, Layers
+
 from src.entities.base_entity import BaseEntity
 from src.entities.entity_state import LifecycleState
 from src.entities.entity_types import CollisionTags, EntityCategory
+
 from src.core.services.event_manager import get_events, ItemCollectedEvent
+
 from src.entities.player.player_effects import apply_item_effects
+
 from src.systems.entity_management.entity_registry import EntityRegistry
+
+from src.graphics.particles.particle_manager import ParticleEmitter
 
 
 class BaseItem(BaseEntity):
@@ -40,7 +47,7 @@ class BaseItem(BaseEntity):
         EntityRegistry.auto_register(cls)
 
     def __init__(self, x, y, item_data=None, image=None, shape_data=None,
-                 draw_manager=None, speed=500, despawn_y=None, lifetime=5.0, bounce=True):
+                 draw_manager=None, speed=300, despawn_y=None, lifetime=7.0, bounce=True):
         """
         Initialize a base item entity.
 
@@ -116,6 +123,22 @@ class BaseItem(BaseEntity):
 
         # Timer despawn
         self.lifetime_timer += dt
+
+        # life time blink
+        life_ratio = self.lifetime_timer / self.lifetime
+
+        if life_ratio > 0.7:
+            blink_speed = 4 * (life_ratio ** 3)
+
+            if int(self.lifetime_timer * blink_speed) % 2 == 0:
+                self.image.set_alpha(255)
+
+            else:
+                self.image.set_alpha(60)
+
+        else:
+            self.image.set_alpha(255)
+
         if self.lifetime_timer >= self.lifetime:
             self.mark_dead(immediate=True)
             return
@@ -126,16 +149,26 @@ class BaseItem(BaseEntity):
 
         # Bounce off screen edges
         if self.bounce_enabled:
-            if self.pos.x <= 0 or self.pos.x >= Display.WIDTH:
-                self.velocity.x *= -1  # Reflect X
-            if self.pos.y <= 0 or self.pos.y >= Display.HEIGHT:
-                self.velocity.y *= -1  # Reflect Y
+            # Clamp first so we never cross boundary
+            if self.pos.x <= 0:
+                self.pos.x = 0
+                self.velocity.x *= -1
+            elif self.pos.x >= Display.WIDTH:
+                self.pos.x = Display.WIDTH
+                self.velocity.x *= -1
+
+            if self.pos.y <= 0:
+                self.pos.y = 0
+                self.velocity.y *= -1
+            elif self.pos.y >= Display.HEIGHT:
+                self.pos.y = Display.HEIGHT
+                self.velocity.y *= -1
 
         self.sync_rect()
 
-    def draw(self, draw_manager):
-        """Render the item sprite."""
-        draw_manager.draw_entity(self, layer=self.layer)
+    # def draw(self, draw_manager):
+    #     """Render the item sprite."""
+    #     draw_manager.draw_entity(self, layer=self.layer)
 
     def get_effects(self) -> list:
         """Returns effects list from item_data."""
@@ -143,12 +176,24 @@ class BaseItem(BaseEntity):
 
     def on_collision(self, other, collision_tag=None):
         """Handle collision with player."""
-        # Use passed tag if provided (prevents race conditions), else read current tag
         tag = collision_tag if collision_tag is not None else getattr(other, "collision_tag", "unknown")
 
         if tag == "player":
-            # Apply effects directly to player
-            apply_item_effects(other, self.get_effects())
+            particle_preset = self.item_data.get("particle_preset")
+
+            # Apply effects directly to player (pass particle_preset for duration effects)
+            apply_item_effects(other, self.get_effects(), particle_preset=particle_preset)
+
+            # Spawn pickup particle burst only for instant effects (no duration)
+            has_duration = any(e.get("duration") for e in self.get_effects())
+            if particle_preset and not has_duration:
+                count = self.item_data.get("particle_count", 12)
+                # Sparkle effect: spawn particles at random offsets around player
+                for _ in range(count):
+                    offset_x = random.uniform(-24, 24)
+                    offset_y = random.uniform(-24, 24)
+                    pos = (other.pos.x + offset_x, other.pos.y + offset_y)
+                    ParticleEmitter.burst(particle_preset, pos, count=1)
 
             # Notify observers (achievements, ui, etc can subscribe)
             get_events().dispatch(ItemCollectedEvent(effects=self.get_effects()))

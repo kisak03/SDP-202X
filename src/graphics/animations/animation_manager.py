@@ -13,12 +13,18 @@ Responsibilities
 """
 
 from src.core.debug.debug_logger import DebugLogger
-from src.graphics.animations.animation_registry import get_animation, get_animations_for_entity
+
+from src.graphics.animations.animation_registry import (
+    get_animation,
+    get_animations_for_entity,
+)
+
 from src.graphics.animations.animation_data import (
     get_animation_frames,
     get_animation_duration,
-    get_animation_config
+    get_animation_config,
 )
+
 from src.entities.entity_state import LifecycleState
 
 
@@ -140,6 +146,13 @@ class AnimationManager:
             if death_state == LifecycleState.ALIVE:
                 self.entity.image = self.entity._base_image
                 self.entity.image.set_alpha(255)
+
+                # Re-apply rotation using cached index
+                if getattr(self.entity, '_rotation_enabled', False):
+                    cached_idx = self.entity._cached_rotation_index
+                    if cached_idx >= 0:
+                        self.entity.image = self.entity._get_rotated_surface(cached_idx)
+                        self.entity.rect = self.entity.image.get_rect(center=self.entity.rect.center)
 
         self.active_type = None
         self.timer = 0.0

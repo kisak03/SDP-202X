@@ -41,7 +41,7 @@ jobs:
 
   call-build-action:
     needs: release
-    uses: ./.github/workflows/python-exe.yml
+    uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
       tags: ${{ needs.release.outputs.tag }}

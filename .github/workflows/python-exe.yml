@@ -37,6 +37,7 @@ jobs:
     - name: pyinstaller
       run: |
         pyinstaller --onefile --noconsole main.py
+        zip -r dist.zip ./dist
 
     - name: Upload artifact (windows)
       if: ${{ matrix.os == 'windows-latest' }}
@@ -52,8 +53,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ inputs.release_urls }}
-        asset_path: dist/main.exe
-        asset_name: main-windows-${{ inputs.tags }}.exe
+        asset_path: ./dist.zip
+        asset_name: main-windows-${{ inputs.tags }}.zip
         asset_content_type: application/zip
 
     - name: Upload artifact (mac os)
@@ -70,6 +71,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ inputs.release_urls }}
-        asset_path: dist/main.app
-        asset_name: main-mac-${{ inputs.tags }}.app
+        asset_path: ./dist.zip
+        asset_name: main-mac-${{ inputs.tags }}.zip
         asset_content_type: application/zip

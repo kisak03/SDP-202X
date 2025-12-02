@@ -16,7 +16,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           release_branches: main
           default_bump: patch
-          custom_release_rules: feat:minor:Feature, wip:minor:Wip, refactor:minor:Refactoring, fix:patch:Fix
+          custom_release_rules: .*feat:minor:Feature, .*wip:minor:Wip, .*refactor:minor:Refactoring, .*fix:patch:Fix
+          dry_run: true
 
       - name: Create a GitHub release
         uses: ncipollo/release-action@v1

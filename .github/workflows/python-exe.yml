@@ -4,10 +4,14 @@
 name: build
 
 on:
-  push:
-    tags: [v*]
-  pull_request:
-    tags: [v*]
+  workflow_call:
+    inputs:
+      tags:
+        required: true
+        type: string
+      release_urls:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -41,9 +45,29 @@ jobs:
         name: windows_file
         path: dist/main.exe
 
+    - name: Upload release (windows)
+      if: ${{ matrix.os == 'windows-latest' }}
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ inputs.release_urls }}
+        asset_path: dist/main.exe
+        asset_name: main-windows-${{ inputs.tags }}.exe
+
     - name: Upload artifact (mac os)
       if: ${{ matrix.os == 'macos-latest' }}
       uses: actions/upload-artifact@v4
       with:
         name: mac_file
         path: dist/main.app
+
+    - name: Upload release (windows)
+      if: ${{ matrix.os == 'macos-latest' }}
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ inputs.release_urls }}
+        asset_path: dist/main.app
+        asset_name: main-mac-${{ inputs.tags }}.app

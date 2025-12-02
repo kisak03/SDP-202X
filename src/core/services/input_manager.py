@@ -1,20 +1,25 @@
 """
 input_manager.py
 ----------------
-Handles all input sources including keyboard and (future) controller support.
+Unified input system with context-aware action queries.
 
-Responsibilities
-----------------
-- Maintain current input state for movement and actions.
-- Support customizable key bindings.
-- Merge keyboard and controller input into a single movement vector.
+Provides:
+- Context-based input handling (gameplay, ui, system)
+- Edge detection (pressed, held, released)
+- Keyboard and controller support
+- Normalized movement vectors
 """
+
 import pygame
+
 from src.core.debug.debug_logger import DebugLogger
+from src.core.runtime.game_settings import Debug, Input
+
 
 # ===========================================================
 # Default Key Bindings
 # ===========================================================
+
 DEFAULT_KEY_BINDINGS = {
     "gameplay": {
         "move_left": [pygame.K_LEFT, pygame.K_a],
@@ -33,7 +38,7 @@ DEFAULT_KEY_BINDINGS = {
         "confirm": [pygame.K_RETURN, pygame.K_SPACE],
         "back": [pygame.K_ESCAPE],
     },
-    "system": {  # !!SHOULD NOT OVERLAP WITH OTHER KEYBINDING GROUPS!!
+    "system": {
         "toggle_debug": [pygame.K_F3],
         "toggle_fullscreen": [pygame.K_F11],
     },
@@ -41,409 +46,454 @@ DEFAULT_KEY_BINDINGS = {
 
 
 class InputManager:
-    """Processes player input from keyboard and (optionally) controllers."""
+    """
+    Unified input system with context-aware action queries.
+
+    Supports keyboard and controller input with automatic edge detection
+    for pressed/held/released states.
+
+    Usage:
+        if input_manager.action_pressed("attack"):   # Rising edge
+            player.shoot()
+
+        if input_manager.action_held("attack"):      # Continuous
+            player.charge_shot()
+
+        if input_manager.action_released("attack"):  # Falling edge
+            player.fire_charged_shot()
+
+        move_dir = input_manager.get_normalized_move()  # Movement vector
+    """
 
     # ===========================================================
     # Initialization
     # ===========================================================
-    def __init__(self, key_bindings=None):
+
+    def __init__(self, key_bindings=None, display_manager=None):
         """
-        Initialize keyboard and optional controller input.
+        Initialize input system.
 
         Args:
-            key_bindings (dict, optional): Custom key-action mapping.
-                Defaults to DEFAULT_KEY_BINDINGS if not provided.
+            key_bindings: Custom key bindings dict (uses DEFAULT_KEY_BINDINGS if None)
+            display_manager: Reference for mouse coordinate conversion
         """
-        self.key_bindings = key_bindings or DEFAULT_KEY_BINDINGS
-        self.context = "gameplay"  # active context ("gameplay" or "ui")
-
-        # Build flat lookup tables at init
-        self._key_to_action_cache = {}  # {context: {pygame_key: action_name}}
-        self._active_lookup = None      # Points to current context's lookup
-        self._build_key_caches()
-
-        self._context_keys = {}        # {context: [pygame_keys]}
-        self._active_keys = []         # Current context's keys only
-        self._build_key_lists()
-
-        self._switch_active_cache("gameplay")
-
         DebugLogger.init_entry("InputManager")
 
-        # -------------------------------------------------------
-        # Validate that system bindings do not overlap with others
-        # -------------------------------------------------------
+        self.key_bindings = key_bindings or DEFAULT_KEY_BINDINGS
+        self.display_manager = display_manager
+        self.context = "gameplay"
+
+        # Build lookup tables
+        self._init_lookup_tables()
+        self._init_action_registry()
+        self._init_movement_state()
+        self._init_controller()
+
+        # Cursor auto-hide system
+        self.mouse_enabled = True
+        self.prev_mouse_pos = pygame.mouse.get_pos()
+        self.mouse_move_threshold = 5
+
         self._validate_bindings()
 
-        # -------------------------------------------------------
-        # Controller setup
-        # -------------------------------------------------------
-        pygame.joystick.init()
-        self.controller = None
-        if pygame.joystick.get_count() > 0:
-            self.controller = pygame.joystick.Joystick(0)
-            self.controller.init()
-            DebugLogger.init_sub("Controller Input Initialized")
-            DebugLogger.init_sub(f"Detected: {self.controller.get_name()}", level=2)
+    def _init_lookup_tables(self):
+        """Build bidirectional lookup tables for fast key/action queries."""
+        self._key_to_action_cache = {}
+        self._action_to_keys_cache = {}
+        self._context_keys = {}
 
-        self._has_controller = self.controller is not None
+        for context_name, actions in self.key_bindings.items():
+            key_to_action = {}
+            action_to_keys = {}
+            key_set = set()
 
-        DebugLogger.init_sub("Keyboard Input Initialized")
+            for action_name, keys in actions.items():
+                key_set.update(keys)
+                action_to_keys[action_name] = tuple(keys)
+                for key in keys:
+                    key_to_action[key] = action_name
 
-        # -------------------------------------------------------
-        # Movement and gameplay state tracking
-        # -------------------------------------------------------
+            self._key_to_action_cache[context_name] = key_to_action
+            self._action_to_keys_cache[context_name] = action_to_keys
+            self._context_keys[context_name] = tuple(key_set)
+
+        # Set initial active context
+        self._active_lookup = self._key_to_action_cache["gameplay"]
+        self._active_action_to_keys = self._action_to_keys_cache["gameplay"]
+        self._active_keys = self._context_keys["gameplay"]
+
+    def _init_action_registry(self):
+        """Initialize state tracking for all non-system actions."""
+        self._actions = {}
+
+        for context_name, actions in self.key_bindings.items():
+            if context_name == "system":
+                continue
+
+            for action_name in actions:
+                self._actions[action_name] = {
+                    "pressed": False,
+                    "held": False,
+                    "released": False,
+                    "prev_held": False,
+                }
+
+    def _init_movement_state(self):
+        """Initialize movement vector tracking."""
         self.move = pygame.Vector2(0, 0)
         self._move_keyboard = pygame.Vector2(0, 0)
         self._move_controller = pygame.Vector2(0, 0)
-
         self._normalized_move = pygame.Vector2(0, 0)
         self._last_raw_move = pygame.Vector2(0, 0)
         self._normalized_dirty = True
 
-        # Action states (gameplay)
-        self.attack_pressed = False
-        self.attack_held = False
-        self.bomb_pressed = False
-        self.pause_pressed = False
+    def _init_controller(self):
+        """Initialize game controller if available."""
+        pygame.joystick.init()
+        self.controller = None
 
-        # UI navigation states
-        self.ui_up = False
-        self.ui_down = False
-        self.ui_left = False
-        self.ui_right = False
-        self.ui_confirm = False
-        self.ui_back = False
+        if pygame.joystick.get_count() > 0:
+            self.controller = pygame.joystick.Joystick(0)
+            self.controller.init()
+            DebugLogger.init_sub(f"Controller: {self.controller.get_name()}")
 
-    # ===========================================================
-    # Validation
-    # ===========================================================
     def _validate_bindings(self):
-        """
-        Ensure that system-level bindings do not overlap with gameplay or UI bindings.
-        Logs a warning if any overlap is detected.
-        """
-        system_keys = {k for keys in self.key_bindings["system"].values() for k in keys}
-        other_keys = {
-            k for ctx in ("gameplay", "ui")
-            for keys in self.key_bindings[ctx].values()
-            for k in keys
-        }
+        """Warn if system keys overlap with gameplay/ui contexts."""
+        system_keys = set()
+        for keys in self.key_bindings["system"].values():
+            system_keys.update(keys)
+
+        other_keys = set()
+        for ctx in ("gameplay", "ui"):
+            for keys in self.key_bindings[ctx].values():
+                other_keys.update(keys)
+
         overlap = system_keys & other_keys
         if overlap:
-            DebugLogger.warn(f"[InputManager] Overlapping system keys detected: {overlap}")
+            DebugLogger.warn(f"Overlapping system keys: {overlap}")
 
     # ===========================================================
     # Context Management
     # ===========================================================
+
     def set_context(self, name: str):
         """
-        Switch between contexts ("gameplay", "ui").
+        Switch input context.
+
+        Syncs held state to prevent false edges on context switch.
 
         Args:
-            name (str): Name of the context to activate.
+            name: Context name ("gameplay", "ui", "system")
         """
         if name not in self.key_bindings:
             DebugLogger.warn(f"Unknown context: {name}")
             return
+
         self.context = name
-        self._switch_active_cache(name)  # Just swap pointer
+        self._active_lookup = self._key_to_action_cache[name]
+        self._active_action_to_keys = self._action_to_keys_cache[name]
+        self._active_keys = self._context_keys[name]
+
+        # Sync action states to prevent false edges
+        self._sync_action_states_on_context_switch()
+
         DebugLogger.state(f"Context switched to [{name.upper()}]")
 
-    def get_context(self):
-        """Return the currently active input context."""
-        return self.context
-
-    # ===========================================================
-    # Update Cycle
-    # ===========================================================
-    def update(self):
-        """Poll all input sources once per frame."""
-        if self.context == "ui":
-            self._update_ui_navigation()
-        else:
-            self._update_gameplay_controls()
-
-    # ===========================================================
-    # Gameplay Input
-    # ===========================================================
-    def _update_gameplay_controls(self):
-        """Poll keyboard/controller input for gameplay actions."""
+    def _sync_action_states_on_context_switch(self):
+        """Reset edge states and sync held state to current key state."""
         keys = pygame.key.get_pressed()
 
-        # Directional input
-        left = self._is_pressed("move_left", keys)
-        right = self._is_pressed("move_right", keys)
-        up = self._is_pressed("move_up", keys)
-        down = self._is_pressed("move_down", keys)
+        for action_name, state in self._actions.items():
+            state["pressed"] = False
+            state["released"] = False
 
-        x = int(right) - int(left)
-        y = int(down) - int(up)
+            if action_name in self._active_action_to_keys:
+                is_held = self._is_action_pressed(action_name, keys)
+                state["prev_held"] = is_held
+                state["held"] = is_held
+            else:
+                state["prev_held"] = False
+                state["held"] = False
 
-        self._move_keyboard.update(x, y)
+    # ===========================================================
+    # Public API: Action Queries
+    # ===========================================================
 
-        # Actions
-        # -----------------------------------------------------------
-        # Attack input
-        # -----------------------------------------------------------
-        self.attack_pressed = self._is_pressed("attack", keys)
-        self.attack_held = self.attack_pressed
+    def action_pressed(self, action: str) -> bool:
+        """
+        Check if action was just pressed this frame (rising edge).
 
-        self.bomb_pressed = self._is_pressed("bomb", keys)
-        self.pause_pressed = self._is_pressed("pause", keys)
+        Use for single-shot actions: shooting, jumping, menu confirm.
+        """
+        state = self._actions.get(action)
+        return state["pressed"] if state else False
 
-        # Merge controller input (unchanged)
-        # self._update_controller()
-        # self._merge_inputs()
+    def action_held(self, action: str) -> bool:
+        """
+        Check if action is currently held down.
 
-        if self._has_controller:
-            self._update_with_controller()
+        Use for continuous actions: charging, sprinting.
+        """
+        state = self._actions.get(action)
+        return state["held"] if state else False
+
+    def action_released(self, action: str) -> bool:
+        """
+        Check if action was just released this frame (falling edge).
+
+        Use for release triggers: charge releases, toggle completion.
+        """
+        state = self._actions.get(action)
+        return state["released"] if state else False
+
+    def get_normalized_move(self) -> pygame.Vector2:
+        """
+        Get normalized movement vector (gameplay context only).
+
+        Returns unit vector for consistent diagonal movement speed.
+        """
+        if self._normalized_dirty:
+            if self.move.length_squared() > 0:
+                self._normalized_move.update(self.move.normalize())
+            else:
+                self._normalized_move.update(0, 0)
+            self._normalized_dirty = False
+
+        return self._normalized_move
+
+    def get_mouse_pos(self) -> tuple:
+        """
+        Get current mouse position in game coordinates.
+
+        Returns:
+            (x, y) tuple in game space (accounts for display scaling)
+        """
+        screen_pos = pygame.mouse.get_pos()
+        if self.display_manager:
+            return self.display_manager.screen_to_game_pos(*screen_pos)
+        return screen_pos
+
+    # ===========================================================
+    # Frame Update
+    # ===========================================================
+
+    def update(self):
+        """Poll all input sources. Call once per frame."""
+        keys = pygame.key.get_pressed()
+
+        # Auto-hide cursor based on input device
+        self._update_cursor_visibility(keys)
+
+        if self.context == "gameplay":
+            self._update_gameplay(keys)
+        elif self.context == "ui":
+            self._update_ui(keys)
+
+    def _update_gameplay(self, keys):
+        """Update gameplay input: movement and actions."""
+        self._update_movement(keys)
+        self._update_action_state("attack", keys)
+        self._update_action_state("bomb", keys)
+        self._update_action_state("pause", keys)
+
+    def _update_ui(self, keys):
+        """Update UI input: navigation and selection."""
+        self._update_action_state("navigate_up", keys)
+        self._update_action_state("navigate_down", keys)
+        self._update_action_state("navigate_left", keys)
+        self._update_action_state("navigate_right", keys)
+        self._update_action_state("confirm", keys)
+        self._update_action_state("back", keys)
+
+        if self.controller:
+            self._merge_controller_ui()
+
+    def _update_movement(self, keys):
+        """Update movement vector from keyboard and controller."""
+        # Keyboard input
+        left = self._is_action_pressed("move_left", keys)
+        right = self._is_action_pressed("move_right", keys)
+        up = self._is_action_pressed("move_up", keys)
+        down = self._is_action_pressed("move_down", keys)
+
+        self._move_keyboard.update(int(right) - int(left), int(down) - int(up))
+
+        # Merge with controller
+        if self.controller:
+            self._merge_controller_movement()
         else:
-            self._update_keyboard_only()
+            self.move.update(self._move_keyboard)
 
+        # Track changes for normalization cache
         if self.move != self._last_raw_move:
             self._normalized_dirty = True
             self._last_raw_move.update(self.move)
 
-        # Pause handling
-        if self.pause_pressed:
-            if hasattr(self, "scene_manager") and self.scene_manager._active_instance:
-                self.scene_manager._active_instance.on_pause()
-            else:
-                DebugLogger.warn("Pause attempted but SceneManager not linked")
+    def _update_action_state(self, action: str, keys):
+        """
+        Update action state with edge detection.
 
-    def link_scene_manager(self, scene_manager):
-        """Link SceneManager reference after initialization (dependency injection)."""
-        self.scene_manager = scene_manager
+        Compares current frame to previous frame to detect:
+        - pressed: False → True (rising edge)
+        - released: True → False (falling edge)
+        - held: current state
+        """
+        state = self._actions[action]
+        current_held = self._is_action_pressed(action, keys)
+        prev_held = state["prev_held"]
 
-    # ===========================================================
-    # UI Navigation Input
-    # ===========================================================
-
-    def _update_ui_navigation(self):
-        """Poll input for UI navigation and interaction."""
-        keys = pygame.key.get_pressed()
-        self.ui_up = self._is_pressed("navigate_up", keys)
-        self.ui_down = self._is_pressed("navigate_down", keys)
-        self.ui_left = self._is_pressed("navigate_left", keys)
-        self.ui_right = self._is_pressed("navigate_right", keys)
-        self.ui_confirm = self._is_pressed("confirm", keys)
-        self.ui_back = self._is_pressed("back", keys)
-
-        # ------------------------------------------
-        # Controller support for UI
-        # ------------------------------------------
-        if self.controller:
-            self._update_ui_controller()
-            # hat_x, hat_y = self.controller.get_hat(0)  # D-pad
-            # x_axis = self.controller.get_axis(0)  # Analog X
-            # y_axis = self.controller.get_axis(1)  # Analog Y
-            # threshold = 0.5
-            #
-            # # D-pad or analog emulate arrow keys
-            # if hat_y == 1 or y_axis < -threshold:
-            #     self.ui_up = True
-            # elif hat_y == -1 or y_axis > threshold:
-            #     self.ui_down = True
-            # if hat_x == -1 or x_axis < -threshold:
-            #     self.ui_left = True
-            # elif hat_x == 1 or x_axis > threshold:
-            #     self.ui_right = True
-            #
-            # # Controller buttons (customizable later)
-            # self.ui_confirm = self.controller.get_button(0)  # usually A / Cross
-            # self.ui_back = self.controller.get_button(1)  # usually B / Circle
+        state["pressed"] = current_held and not prev_held
+        state["released"] = not current_held and prev_held
+        state["held"] = current_held
+        state["prev_held"] = current_held
 
     # ===========================================================
-    # Controller Input
+    # Controller Integration
     # ===========================================================
-    # def _update_controller(self):
-    #     """
-    #     Poll analog stick axes and controller buttons.
-    #
-    #     Notes:
-    #         - Applies a deadzone to prevent drift.
-    #         - Currently only supports primary analog movement.
-    #     """
-    #     if not self.controller:
-    #         self._move_controller.update(0, 0)
-    #         return
-    #
-    #     x_axis = self.controller.get_axis(0)
-    #     y_axis = self.controller.get_axis(1)
-    #     deadzone = 0.2
-    #
-    #     self._move_controller.x = x_axis if abs(x_axis) > deadzone else 0
-    #     self._move_controller.y = y_axis if abs(y_axis) > deadzone else 0
 
-    def _update_with_controller(self):
-        """Hot path: keyboard + controller merging."""
-        # Read controller axes
+    def _merge_controller_movement(self):
+        """Merge controller analog stick with keyboard movement."""
         x_axis = self.controller.get_axis(0)
         y_axis = self.controller.get_axis(1)
-        deadzone = 0.2
+        deadzone = Input.CONTROLLER_DEADZONE
 
         self._move_controller.x = x_axis if abs(x_axis) > deadzone else 0
         self._move_controller.y = y_axis if abs(y_axis) > deadzone else 0
 
-        # Merge: controller overrides keyboard
+        # Controller overrides keyboard when active
         if self._move_controller.length_squared() > 0:
             self.move.update(self._move_controller)
         else:
             self.move.update(self._move_keyboard)
 
-    def _update_keyboard_only(self):
-        """Hot path: keyboard-only (no controller checks)."""
-        self.move.update(self._move_keyboard)
+    def _merge_controller_ui(self):
+        """Merge controller input for UI navigation."""
+        hat_x, hat_y = (0, 0)
+        if self.controller.get_numhats() > 0:
+            hat_x, hat_y = self.controller.get_hat(0)
 
-    # ===========================================================
-    # Input Merging and Query
-    # ===========================================================
-    # def _merge_inputs(self):
-    #     """Combine keyboard and controller input cleanly."""
-    #     if self._move_controller.length_squared() > 0:
-    #         self.move = self._move_controller
-    #     else:
-    #         self.move = self._move_keyboard
+        x_axis = self.controller.get_axis(0)
+        y_axis = self.controller.get_axis(1)
+        threshold = Input.CONTROLLER_UI_THRESHOLD
 
-    def _is_pressed(self, action, keys):
+        # Map controller inputs to UI actions
+        controller_mappings = [
+            (hat_y == 1 or y_axis < -threshold, "navigate_up"),
+            (hat_y == -1 or y_axis > threshold, "navigate_down"),
+            (hat_x == -1 or x_axis < -threshold, "navigate_left"),
+            (hat_x == 1 or x_axis > threshold, "navigate_right"),
+            (self.controller.get_button(0), "confirm"),
+            (self.controller.get_button(1), "back"),
+        ]
+
+        for is_active, action in controller_mappings:
+            if is_active:
+                self._set_controller_action(action)
+
+    def _set_controller_action(self, action: str):
+        """Set action state from controller input with edge detection."""
+        state = self._actions[action]
+        if not state["prev_held"]:
+            state["pressed"] = True
+        state["held"] = True
+
+    def _update_cursor_visibility(self, keys):
+        """Toggle mouse_enabled based on input device used."""
+        current_mouse_pos = pygame.mouse.get_pos()
+        mouse_delta = (
+            abs(current_mouse_pos[0] - self.prev_mouse_pos[0]),
+            abs(current_mouse_pos[1] - self.prev_mouse_pos[1])
+        )
+
+        # Mouse moved significantly -> enable mouse
+        if mouse_delta[0] > self.mouse_move_threshold or mouse_delta[1] > self.mouse_move_threshold:
+            if not self.mouse_enabled:
+                self.mouse_enabled = True
+                pygame.mouse.set_visible(True)
+            self.prev_mouse_pos = current_mouse_pos
+            return
+
+        self.prev_mouse_pos = current_mouse_pos
+
+        # Keyboard used -> disable mouse
+        if any(keys):
+            self._disable_mouse()
+            return
+
+        # Controller used -> disable mouse
+        if self.controller:
+            for btn in range(self.controller.get_numbuttons()):
+                if self.controller.get_button(btn):
+                    self._disable_mouse()
+                    return
+            for axis in range(self.controller.get_numaxes()):
+                if abs(self.controller.get_axis(axis)) > Input.CONTROLLER_DEADZONE:
+                    self._disable_mouse()
+                    return
+            if self.controller.get_numhats() > 0 and self.controller.get_hat(0) != (0, 0):
+                self._disable_mouse()
+                return
+
+    def get_effective_mouse_pos(self):
         """
-        Check if any bound key for an action is pressed.
-
-        Args:
-            action (str): Name of the input action.
-            keys (pygame.key.ScancodeWrapper): Current keyboard state.
+        Get mouse position, or off-screen if mouse is disabled.
 
         Returns:
-            bool: True if any key bound to the action is pressed.
+            tuple: Mouse position or (-1, -1) if mouse disabled
         """
-        for key in self._active_keys:
-            if keys[key] and self._active_lookup.get(key) == action:
-                return True
-        return False
+        if not self.mouse_enabled:
+            return (-1, -1)
 
-    def _is_pressed_context(self, action, keys, context_dict):
-        """
-        Check if any bound key in a specific context dictionary is pressed.
+        screen_pos = pygame.mouse.get_pos()
+        if self.display_manager:
+            return self.display_manager.screen_to_game_pos(*screen_pos)
+        return screen_pos
 
-        Used for system-level inputs that should always be available,
-        regardless of gameplay/UI context.
-
-        Args:
-            action (str): Input action name.
-            keys (pygame.key.ScancodeWrapper): Current keyboard state.
-            context_dict (dict): Key-binding map for a specific context.
-        """
-        if action not in context_dict:
-            return False
-        for key in context_dict[action]:
-            if keys[key]:
-                return True
-        return False
-
-    def get_normalized_move(self):
-        """
-        Get a normalized movement vector.
-
-        Returns:
-            pygame.Vector2: Normalized direction vector.
-                Returns (0, 0) if no movement input is active.
-        """
-        # Return cached value if input unchanged
-        if not self._normalized_dirty:
-            return self._normalized_move
-
-        # Recompute only when dirty
-        if self.move.length_squared() > 0:
-            self._normalized_move.update(self.move.normalize())
-        else:
-            self._normalized_move.update(0, 0)
-
-        self._normalized_dirty = False
-        return self._normalized_move
-
-    def is_attack_held(self):
-        """Return whether the attack key/button is currently held."""
-        return self.attack_held
+    def _disable_mouse(self):
+        """Disable mouse input mode."""
+        if self.mouse_enabled:
+            self.mouse_enabled = False
+            pygame.mouse.set_visible(False)
 
     # ===========================================================
-    # System-Level Input (Global Hotkeys)
+    # System Input (Global Hotkeys)
     # ===========================================================
+
     def handle_system_input(self, event, display, debug_hud):
         """
-        Handle global system-level input that is always available.
-        These bindings function independently of gameplay/UI contexts.
+        Handle global hotkeys independent of context.
 
         Args:
-            event (pygame.Event): The current input event.
-            display (DisplayManager): Display manager for fullscreen toggle.
-            debug_hud (DebugHUD): Debug HUD instance for toggling visibility.
+            event: pygame event to process
+            display: DisplayManager for fullscreen toggle
+            debug_hud: DebugHUD for visibility toggle
         """
         if event.type != pygame.KEYDOWN:
             return
 
-        keys = pygame.key.get_pressed()
-        system_ctx = self.key_bindings.get("system", {})
+        system_bindings = self.key_bindings.get("system", {})
 
-        # -------------------------------------------------------
-        # F11 → Toggle Fullscreen
-        # -------------------------------------------------------
-        if self._is_pressed_context("toggle_fullscreen", keys, system_ctx):
+        if self._is_system_key_pressed("toggle_fullscreen", event.key, system_bindings):
             display.toggle_fullscreen()
-            DebugLogger.action("Toggled fullscreen via InputManager")
+            DebugLogger.action("Toggled fullscreen")
 
-        # -------------------------------------------------------
-        # F3 → Toggle Debug HUD (and sync hitbox visibility)
-        # -------------------------------------------------------
-        elif self._is_pressed_context("toggle_debug", keys, system_ctx):
+        elif self._is_system_key_pressed("toggle_debug", event.key, system_bindings):
             debug_hud.toggle()
-            from src.core.runtime.game_settings import Debug
             Debug.HITBOX_VISIBLE = debug_hud.visible
-            state = "Visible" if Debug.HITBOX_VISIBLE else "Hidden"
-            DebugLogger.action(f"Hitbox rendering set → {state}")
+            DebugLogger.action(f"Debug HUD: {'ON' if debug_hud.visible else 'OFF'}")
+
+    def _is_system_key_pressed(self, action: str, key: int, bindings: dict) -> bool:
+        """Check if key matches a system action binding."""
+        return key in bindings.get(action, ())
 
     # ===========================================================
-    # helper
+    # Internal Helpers
     # ===========================================================
 
-    def _build_key_caches(self):
-        """Build flat {key: action} lookup for each context."""
-        for context_name, actions in self.key_bindings.items():
-            lookup = {}
-            for action_name, keys in actions.items():
-                for key in keys:
-                    # Store action name for this key
-                    lookup[key] = action_name
-            self._key_to_action_cache[context_name] = lookup
-
-    def _switch_active_cache(self, context_name):
-        """Swap pointer to active lookup table + key list (zero-cost)."""
-        self._active_lookup = self._key_to_action_cache.get(context_name, {})
-        self._active_keys = self._context_keys.get(context_name, [])
-
-    def _build_key_lists(self):
-        """Pre-compute list of keys for each context (Phase 2)."""
-        for context_name, actions in self.key_bindings.items():
-            key_set = set()
-            for keys in actions.values():
-                key_set.update(keys)
-            self._context_keys[context_name] = list(key_set)
-
-    def _update_ui_controller(self):
-        """Controller support for UI (only called if controller exists)."""
-        hat_x, hat_y = self.controller.get_hat(0)
-        x_axis = self.controller.get_axis(0)
-        y_axis = self.controller.get_axis(1)
-        threshold = 0.5
-
-        if hat_y == 1 or y_axis < -threshold:
-            self.ui_up = True
-        elif hat_y == -1 or y_axis > threshold:
-            self.ui_down = True
-        if hat_x == -1 or x_axis < -threshold:
-            self.ui_left = True
-        elif hat_x == 1 or x_axis > threshold:
-            self.ui_right = True
-
-        self.ui_confirm = self.controller.get_button(0)
-        self.ui_back = self.controller.get_button(1)
+    def _is_action_pressed(self, action: str, keys) -> bool:
+        """Check if any key bound to action is currently pressed. O(1) lookup."""
+        bound_keys = self._active_action_to_keys.get(action, ())
+        for key in bound_keys:
+            if keys[key]:
+                return True
+        return False

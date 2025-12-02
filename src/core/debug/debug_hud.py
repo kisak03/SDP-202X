@@ -1,206 +1,327 @@
 """
 debug_hud.py
 ------------
-Implements a lightweight developer overlay that provides quick-access debug
-controls (fullscreen toggle, exit button, etc.).
-
-Responsibilities
-----------------
-- Provide developer-facing UI buttons for quick actions.
-- Operate independently of scene/UI systems (managed by GameLoop).
-- Demonstrate UI button handling, rendering, and state logging.
+Lightweight developer overlay with performance metrics and quick-access controls.
+Uses data-driven UI system for buttons, direct rendering for metrics.
 """
 
 import pygame
+import time
 
-from src.core.runtime import game_settings
-from src.core.runtime.game_state import STATE
+from src.core.runtime.game_settings import Display, Layers
 from src.core.debug.debug_logger import DebugLogger
-from src.ui.components.ui_button import UIButton
+
+from src.ui.core.ui_loader import UILoader
+from src.ui.core.anchor_resolver import AnchorResolver
 
 
 class DebugHUD:
-    """Displays developer buttons for quick debugging actions."""
+    """Developer overlay with metrics and controls."""
 
-    # ===========================================================
-    # Initialization
-    # ===========================================================
-    def __init__(self, display_manager):
+    def __init__(self, display_manager, draw_manager):
         """
-        Initialize the debug HUD interface.
+        Initialize debug HUD with minimal dependencies.
 
         Args:
-            display_manager: Reference to DisplayManager for toggling fullscreen.
+            display_manager: DisplayManager for screen coordinate conversion
+            draw_manager: DrawManager for rendering
         """
         self.display_manager = display_manager
-        self.elements = []
+        self.draw_manager = draw_manager
         self.visible = False
-        self._last_visibility = self.visible
 
-        self._create_elements()
+        # Create standalone UI systems
+        self.loader = UILoader(ui_manager=None, theme_manager=None)
+        self.anchor_resolver = AnchorResolver(Display.WIDTH, Display.HEIGHT)
+
+        # Load UI from config
+        self.root_element = None
+        self._loaded = False
+
+        # Metrics tracking (always active for performance monitoring)
+        self.smoothed_fps = 0.0
+        self.recent_fps_sum = 0.0
+        self.recent_fps_count = 0
+        self.min_fps = float('inf')
+        self.max_fps = 0.0
+        self.min_fps_time = None
+
+        self.frame_time_history = []
+        self.frame_time_history_max = 300
+        self.fps_history = []
+        self.fps_history_max = 300
+        self.current_fps = 0.0
+
+        self.frame_time = 0.0
+        self.update_time = 0.0
+        self.render_time = 0.0
+
+        # Font for metrics (created once)
+        self.font = pygame.font.SysFont("consolas", 14)
+        self.font_bold = pygame.font.SysFont("consolas", 14, bold=True)
 
         DebugLogger.init_entry("DebugHUD")
 
-    # ===========================================================
-    # Element Creation
-    # ===========================================================
-    def _create_elements(self):
-        """Create the debug HUD buttons (fullscreen toggle + exit)."""
-        btn_size = 48  # consistent square size
-        margin = 10
-
-        fullscreen_btn = UIButton(
-            x=margin,
-            y=margin,
-            width=btn_size,
-            height=btn_size,
-            action="toggle_fullscreen",
-            color=(80, 150, 200),
-            hover_color=(100, 180, 230),
-            pressed_color=(60, 120, 160),
-            border_color=(255, 255, 255),
-            border_width=2,
-            icon_type="fullscreen",
-            layer=game_settings.Layers.UI
-        )
-
-        exit_btn = UIButton(
-            x=margin,
-            y=margin * 2 + btn_size,
-            width=btn_size,
-            height=btn_size,
-            action="quit",
-            color=(200, 50, 50),
-            hover_color=(230, 80, 80),
-            pressed_color=(160, 40, 40),
-            border_color=(255, 255, 255),
-            border_width=2,
-            icon_type="close",
-            layer=game_settings.Layers.UI
-        )
-
-        self.elements = [fullscreen_btn, exit_btn]
-
-    # ===========================================================
-    # Update Cycle
-    # ===========================================================
-    def update(self, mouse_pos):
+    def update(self, dt, mouse_pos):
         """
-        Update hover states and button animations.
+        Update UI elements (only when visible).
+        Metrics are tracked regardless of visibility.
 
         Args:
-            mouse_pos (tuple): Current mouse position in screen coordinates.
+            dt: Delta time (unused - buttons don't animate)
+            mouse_pos: Mouse position in screen coordinates
         """
-        if not self.visible:
+        if not self.visible or not self.root_element:
             return
 
-        for elem in self.elements:
-            elem.update(mouse_pos)
+        # Convert mouse to game coordinates
+        game_pos = self.display_manager.screen_to_game_pos(*mouse_pos)
 
-        # Log only when visibility changes
-        if self.visible != self._last_visibility:
-            self._last_visibility = self.visible
+        # Update UI tree
+        self._update_element_tree(self.root_element, dt, game_pos)
 
-    # ===========================================================
-    # Event Handling
-    # ===========================================================
+    def _update_element_tree(self, element, dt, mouse_pos):
+        """Recursively update element and children."""
+        if not element.visible:
+            return
+
+        element.update(dt, mouse_pos, binding_system=None)
+
+        if hasattr(element, 'children'):
+            for child in element.children:
+                self._update_element_tree(child, dt, mouse_pos)
+
     def handle_event(self, event):
         """
-        Handle mouse click events for button interaction.
+        Handle input events for buttons.
 
         Args:
-            event (pygame.event.Event): Input event from the main loop.
+            event: Pygame event
+
+        Returns:
+            Action string if button clicked, None otherwise
         """
-        if not self.visible:
+        if not self.visible or not self.root_element:
             return None
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            # Convert from window coordinates to internal game-space
-            game_x, game_y = self.display_manager.screen_to_game_pos(*event.pos)
-            for elem in self.elements:
-                action = elem.handle_click((game_x, game_y))
-                if action:
-                    return self._execute_action(action)
+            game_pos = self.display_manager.screen_to_game_pos(*event.pos)
+            action = self._handle_click_tree(self.root_element, game_pos)
+            if action:
+                return self._execute_action(action)
+
         return None
 
-    # ===========================================================
-    # Button Action Execution
-    # ===========================================================
-    def _execute_action(self, action):
-        """
-        Perform the assigned action from a clicked button.
+    def _handle_click_tree(self, element, mouse_pos):
+        """Recursively check element tree for clicks."""
+        if not element.visible or not element.enabled:
+            return None
 
-        Args:
-            action (str): The action key of the clicked button.
-        """
+        # Check this element
+        if element.rect and element.rect.collidepoint(mouse_pos):
+            action = element.handle_click(mouse_pos)
+            if action:
+                return action
+
+        # Check children (front to back)
+        if hasattr(element, 'children'):
+            for child in reversed(element.children):
+                action = self._handle_click_tree(child, mouse_pos)
+                if action:
+                    return action
+
+        return None
+
+    def _execute_action(self, action):
+        """Execute button action."""
         if action == "toggle_fullscreen":
             self.display_manager.toggle_fullscreen()
-            state = "ON" if getattr(self.display_manager, "is_fullscreen", False) else "OFF"
-            DebugLogger.action(f"Fullscreen toggled → {state}")
+            DebugLogger.action(f"Fullscreen toggled")
 
         elif action == "quit":
-            DebugLogger.action("Quit requested (GameLoop will terminate)")
+            DebugLogger.action("Quit requested")
             pygame.event.post(pygame.event.Event(pygame.QUIT))
 
         else:
-            DebugLogger.warn(f"Unrecognized button action: {action}")
+            DebugLogger.warn(f"Unknown action: {action}")
 
         return action
 
-    # ===========================================================
-    # Rendering
-    # ===========================================================
-    def draw(self, draw_manager):
+    def draw(self, draw_manager, player=None):
         """
-        Queue visible elements for rendering.
+        Render debug HUD (only when visible).
 
         Args:
-            draw_manager: DrawManager instance used for rendering.
+            draw_manager: DrawManager instance
+            player: Optional player reference for debug info
         """
         if not self.visible:
             return
 
-        # --------------------------------------------------------
-        # Draw buttons
-        # --------------------------------------------------------
-        for elem in self.elements:
-            if elem.visible:
-                draw_manager.queue_draw(elem.render_surface(), elem.rect, elem.layer)
+        # Draw UI buttons (from YAML config)
+        if self.root_element:
+            self._draw_element_tree(self.root_element, draw_manager)
 
-        # --------------------------------------------------------
-        # Player Debug Info (global, scene-independent)
-        # --------------------------------------------------------
-        player = STATE.player_ref
+        # Draw metrics (direct rendering for performance)
+        self._draw_metrics(draw_manager, player)
 
+    def _draw_element_tree(self, element, draw_manager, parent=None):
+        """Recursively draw element tree."""
+        if not element.visible:
+            return
+
+        # NEW: Only resolve position if cache is invalid
+        parent_invalid = parent and not getattr(parent, '_position_cache_valid', True)
+
+        if not getattr(element, '_position_cache_valid', False) or parent_invalid:
+            element.rect = self.anchor_resolver.resolve(element, parent)
+            element._position_cache_valid = True
+
+        # Register element if it has an ID (BEFORE children)
+        if element.id:
+            self.anchor_resolver.register_element(element.id, element)
+
+        # Render surface
+        surface = element.render_surface()
+
+        # Queue for drawing
+        draw_manager.queue_draw(surface, element.rect, Layers.DEBUG)
+
+        # Draw children
+        if hasattr(element, 'children'):
+            for child in element.children:
+                self._draw_element_tree(child, draw_manager, parent=element)
+
+    def _draw_metrics(self, draw_manager, player=None):
+        """Draw performance metrics with translucent background."""
+        # Background panel (translucent dark)
+        panel_width = 280
+        panel_height = 180
+        panel_x = 10
+        panel_y = 10
+
+        bg_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        bg_surface.fill((20, 20, 20, 180))  # Dark translucent
+        bg_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        # print(f"[DEBUG] Drawing metrics panel at layer {Layers.DEBUG}")
+        draw_manager.queue_draw(bg_surface, bg_rect, Layers.DEBUG)
+
+        # Metrics text
+        y_offset = panel_y + 10
+        x_offset = panel_x + 10
+        line_height = 16
+
+        # Player info (if exists)
         if player:
-            font = pygame.font.SysFont("consolas", 18)
-            pos_text = f"Pos: ({player.rect.x:.1f}, {player.rect.y:.1f})"
-            vel_text = f"Vel: ({player.velocity.x:.2f}, {player.velocity.y:.2f})"
+            self._draw_text(f"Pos: ({player.rect.x:.0f}, {player.rect.y:.0f})",
+                           x_offset, y_offset, (150, 255, 150), draw_manager)
+            y_offset += line_height
 
-            surface_pos = font.render(pos_text, True, (255, 255, 255))
-            surface_vel = font.render(vel_text, True, (255, 255, 255))
+            self._draw_text(f"Vel: ({player.velocity.x:.1f}, {player.velocity.y:.1f})",
+                           x_offset, y_offset, (150, 255, 150), draw_manager)
+            y_offset += line_height + 5
 
-            # Display near the top-left corner
-            rect_pos = surface_pos.get_rect(topleft=(70, 20))
-            rect_vel = surface_vel.get_rect(topleft=(70, 40))
+        # FPS metrics
+        recent_avg = (self.recent_fps_sum / self.recent_fps_count
+                     if self.recent_fps_count > 0 else 0.0)
 
-            draw_manager.queue_draw(surface_pos, rect_pos, game_settings.Layers.UI)
-            draw_manager.queue_draw(surface_vel, rect_vel, game_settings.Layers.UI)
+        self._draw_text(f"FPS (smooth): {self.smoothed_fps:.1f}",
+                       x_offset, y_offset, (100, 255, 100), draw_manager, bold=True)
+        y_offset += line_height
 
-        # --------------------------------------------------------
-        # Hitbox Debug Toggle Indicator
-        # --------------------------------------------------------
-        y_offset = 60
-        hitbox_state = "ON" if game_settings.Debug.HITBOX_VISIBLE else "OFF"
-        hitbox_color = (0, 255, 0) if game_settings.Debug.HITBOX_VISIBLE else (255, 80, 80)
-        surface_hitbox = font.render(f"Hitbox: {hitbox_state}", True, hitbox_color)
-        draw_manager.queue_draw(surface_hitbox, surface_hitbox.get_rect(topleft=(70, y_offset)), game_settings.Layers.UI)
+        self._draw_text(f"FPS (recent): {recent_avg:.1f}",
+                       x_offset, y_offset, (100, 200, 255), draw_manager)
+        y_offset += line_height
 
-    # ===========================================================
-    # Visibility Controls
-    # ===========================================================
+        min_text = f"Min: {self.min_fps:.1f}"
+        if self.min_fps_time:
+            min_text += f" ({self.min_fps_time})"
+        self._draw_text(min_text, x_offset, y_offset, (255, 200, 100), draw_manager)
+        y_offset += line_height
+
+        self._draw_text(f"Max: {self.max_fps:.1f}",
+                       x_offset, y_offset, (150, 200, 255), draw_manager)
+        y_offset += line_height + 5
+
+        # Frame timing
+        self._draw_text(f"Frame: {self.frame_time:.2f}ms",
+                       x_offset, y_offset, (255, 255, 150), draw_manager)
+        y_offset += line_height
+
+        self._draw_text(f"Update: {self.update_time:.2f}ms",
+                       x_offset, y_offset, (200, 255, 200), draw_manager)
+        y_offset += line_height
+
+        self._draw_text(f"Render: {self.render_time:.2f}ms",
+                       x_offset, y_offset, (200, 200, 255), draw_manager)
+
+    def _draw_text(self, text, x, y, color, draw_manager, bold=False):
+        """Helper to render and queue text."""
+        font = self.font_bold if bold else self.font
+        surface = font.render(text, True, color)
+        rect = surface.get_rect(topleft=(x, y))
+        draw_manager.queue_draw(surface, rect, Layers.DEBUG)
+
     def toggle(self):
-        """Toggle the HUD’s visibility."""
         self.visible = not self.visible
-        state = "Shown" if self.visible else "Hidden"
-        DebugLogger.action(f"Toggled visibility → {state}")
+        if self.visible:
+            self._ensure_loaded()
+
+        state = "shown" if self.visible else "hidden"
+        DebugLogger.action(f"DebugHUD {state}")
+
+    def record_frame_metrics(self, frame_time_ms: float, scene_time: float, render_time: float, fps: float):
+        """
+        Record all frame timing metrics. Called once per frame by Main Loop.
+
+        Args:
+            frame_time_ms: Total frame time in milliseconds
+            scene_time: Scene update time in milliseconds
+            render_time: Render pass time in milliseconds
+            fps: Current frames per second
+        """
+        # Core timing
+        self.frame_time = frame_time_ms
+        self.update_time = scene_time
+        self.render_time = render_time
+
+        # Frame time history (for graphs)
+        self.frame_time_history.append(frame_time_ms)
+        if len(self.frame_time_history) > self.frame_time_history_max:
+            self.frame_time_history.pop(0)
+
+        # FPS history (for graphs)
+        self.fps_history.append(fps)
+        if len(self.fps_history) > self.fps_history_max:
+            self.fps_history.pop(0)
+
+        # Smoothed FPS (exponential moving average)
+        self.smoothed_fps = (
+            self.smoothed_fps * 0.9 + fps * 0.1
+            if self.smoothed_fps > 0 else fps
+        )
+
+        # Recent average (rolling window)
+        self.recent_fps_sum += fps
+        self.recent_fps_count += 1
+        if self.recent_fps_count > 300:  # 5-second window decay
+            self.recent_fps_sum *= 0.5
+            self.recent_fps_count = int(self.recent_fps_count * 0.5)
+
+        # Min/Max tracking
+        if fps > self.max_fps:
+            self.max_fps = fps
+
+        if fps < self.min_fps:
+            self.min_fps = fps
+            self.min_fps_time = time.strftime("%H:%M:%S")
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        self._loaded = True
+
+        try:
+            self.root_element = self.loader.load("hud/debug_hud.yaml")
+        except FileNotFoundError:
+            DebugLogger.warn("debug_hud.yaml not found - using fallback")

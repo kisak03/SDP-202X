@@ -1,0 +1,96 @@
+{
+  "heal": {
+    "name": "Health Pack",
+    "asset_path": "health_pack.png",
+    "scale": 1.0,
+    "drop_weight": 10000,
+    "particle_preset": "item_heal",
+    "physics": {
+      "velo_x": 0,
+      "velo_y": 160,
+      "hitbox_scale": 0.85
+    },
+    "effects": [
+      {
+        "type": "ADD_HEALTH",
+        "amount": 1
+      }
+    ]
+  },
+  "quick_fire": {
+    "name": "Quick Fire",
+    "asset_path": "quick_fire.png",
+    "scale": 1.0,
+    "drop_weight": 1000,
+    "particle_preset": "item_fire_rate",
+    "physics": {
+      "velo_x": 0,
+      "velo_y": 160,
+      "hitbox_scale": 0.85
+    },
+    "effects": [
+      {
+        "type": "MULTIPLY_FIRE_RATE",
+        "multiplier": 2,
+        "duration": 4
+      }
+    ]
+  },
+  "speed_boost": {
+    "name": "Speed Boost",
+    "asset_path": "speed_boost.png",
+    "scale": 1.0,
+    "drop_weight": 800,
+    "particle_preset": "item_speed",
+    "physics": {
+      "velo_x": 0,
+      "velo_y": 160,
+      "hitbox_scale": 0.85
+    },
+    "effects": [
+      {
+        "type": "SPEED_BOOST",
+        "multiplier": 1.5,
+        "duration": 5
+      }
+    ]
+  },
+  "nuke": {
+    "name": "Nuke",
+    "asset_path": "nuke.png",
+    "scale": 1.0,
+    "drop_weight": 50000000,
+    "physics": {
+      "velo_x": 0,
+      "velo_y": 120,
+      "hitbox_scale": 0.85
+    },
+    "effects": [
+      {
+        "type": "USE_NUKE"
+      }
+    ]
+  },
+  "shield": {
+    "name": "Shield",
+    "asset_path": "shield.png",
+    "scale": 1.0,
+    "drop_weight": 600,
+    "particle_preset": "item_shield",
+    "physics": {
+      "velo_x": 0,
+      "velo_y": 140,
+      "hitbox_scale": 0.85
+    },
+    "effects": [
+      {
+        "type": "SPAWN_SHIELD",
+        "duration": 5,
+        "radius": 56,
+        "knockback": 150,
+        "damage": 1,
+        "color": [100, 255, 150]
+      }
+    ]
+  }
+}

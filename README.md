@@ -26,138 +26,295 @@ This project demonstrates the use of:
 ## 202X Project Structure
 
 ```
-202X/
-│
+SDP-202X/
 ├─ README.md
 ├─ main.py
-├─ .gitignore
+├─ pytest.ini
+├─ requirements-test.txt
+├─ run_tests.py
+│
+├─ assets/
+│  ├─ audio/
+│  │  ├─ bfx/
+│  │  │  ├─ EnemyDestroy.wav
+│  │  │  ├─ PlayerDestroy.wav
+│  │  │  └─ PlayerShoot.wav
+│  │  │
+│  │  ├─ bgm/
+│  │  │  ├─ BossTheme.wav
+│  │  │  ├─ GameClear.wav
+│  │  │  ├─ GameOver.wav
+│  │  │  ├─ IngameBGM.wav
+│  │  │  └─ MainMenuBGM.wav
+│  │  │
+│  │  └─ ui/
+│  │     └─ ButtonClick.wav
+│  │
+│  ├─ fonts/
+│  │  └─ ScienceGothic_Condensed-Light.ttf
+│  │
+│  └─ images/
+│     ├─ null.png
+│     │
+│     ├─ backgrounds/
+│     │  ├─ main_menu.png
+│     │  ├─ main_menu1.png
+│     │  ├─ mission_select.png
+│     │  ├─ settings_menu.png
+│     │  ├─ settings_menu1.png
+│     │  └─ settings_menu2.png
+│     │
+│     ├─ effects/
+│     │  └─ explosions/
+│     │     ├─ explosion01.png
+│     │     ├─ explosion02.png
+│     │     └─ explosion03.png
+│     │
+│     ├─ icons/
+│     │  └─ 202X_icon.png
+│     │
+│     ├─ maps/
+│     │  ├─ battle_stage1.png
+│     │  ├─ battle_stage2.png
+│     │  ├─ battle_stage3.png
+│     │  ├─ battle_stage4.png
+│     │  ├─ boss_stage.png
+│     │  ├─ cloud_layer.png
+│     │  └─ test_background.png
+│     │
+│     ├─ sprites/
+│     │  ├─ enemies/
+│     │  │  ├─ enemy_basic.png
+│     │  │  ├─ enemy_homing.png
+│     │  │  ├─ enemy_homing2.png
+│     │  │  ├─ enemy_waypoint.png
+│     │  │  ├─ missile.png
+│     │  │  └─ waypoint_shooter.png
+│     │  │
+│     │  ├─ items/
+│     │  │  ├─ health_pack.png
+│     │  │  ├─ nuke.png
+│     │  │  ├─ quick_fire.png
+│     │  │  └─ speed_boost.png
+│     │  │
+│     │  ├─ player/
+│     │  │  ├─ robot_Garda.png
+│     │  │  └─ robot_sheet.png
+│     │  │
+│     │  └─ projectiles/
+│     │     ├─ 100H.png
+│     │     ├─ m107.png
+│     │     ├─ plasma_green.png
+│     │     └─ plasma_red.png
+│     │
+│     └─ ui/
+│        ├─ bars/
+│        │  ├─ exp_bar.png
+│        │  ├─ exp_frame.png
+│        │  ├─ left_bar.png
+│        │  └─ right_bar.png
+│        │
+│        └─ health/
+│           ├─ health_gauge.png
+│           └─ health_needle.png
 │
 ├─ src/
 │  ├─ __init__.py
 │  │
 │  ├─ audio/
-│  │   ├─ __init__.py
-│  │   └─ sound_manager.py
+│  │  ├─ __init__.py
+│  │  └─ sound_manager.py
+│  │
+│  ├─ config/
+│  │  ├─ animations/
+│  │  │  ├─ animations.json
+│  │  │  └─ particles.json
+│  │  │
+│  │  ├─ entities/
+│  │  │  ├─ bullets.json
+│  │  │  ├─ enemies.json
+│  │  │  └─ items.json
+│  │  │
+│  │  ├─ missions/
+│  │  │  ├─ 1_Tutorial.json
+│  │  │  ├─ 2_Mission.json
+│  │  │  ├─ 3_Boss.json
+│  │  │  ├─ Campaigns.json
+│  │  │  └─ test_shooter.json
+│  │  │
+│  │  ├─ player/
+│  │  │  ├─ player.json
+│  │  │  └─ upgrades.json
+│  │  │
+│  │  └─ ui/
+│  │     ├─ hud/
+│  │     │  ├─ debug_hud.yaml
+│  │     │  └─ player_hud.yaml
+│  │     │
+│  │     └─ screens/
+│  │        ├─ game_over.yaml
+│  │        ├─ level_up.yaml
+│  │        ├─ main_menu.yaml
+│  │        ├─ mission_select.yaml
+│  │        ├─ pause_screen.yaml
+│  │        └─ settings.yaml
 │  │
 │  ├─ core/
-│  │   ├─ __init__.py
-│  │   │
-│  │   ├─ debug/
-│  │   │   ├─ __init__.py
-│  │   │   ├─ debug_hud.py
-│  │   │   └─ debug_logger.py
-│  │   │
-│  │   ├─ runtime/
-│  │   │   ├─ __init__.py
-│  │   │   ├─ game_loop.py
-│  │   │   ├─ game_settings.py
-│  │   │   ├─ game_state.py
-│  │   │   └─ scene_manager.py
-│  │   │
-│  │   └─ services/
-│  │       ├─ __init__.py
-│  │       ├─ config_manager.py
-│  │       ├─ display_manager.py
-│  │       └─ input_manager.py
-│  │
-│  ├─ data/
-│  │   ├─ configs/
-│  │   │   └─ player_config.py
-│  │   │
-│  │   └─ levels/
-│  │       └─ Stage 1.py
+│  │  ├─ __init__.py
+│  │  │
+│  │  ├─ debug/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ debug_hud.py
+│  │  │  └─ debug_logger.py
+│  │  │
+│  │  ├─ runtime/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ game_settings.py
+│  │  │  ├─ main_loop.py
+│  │  │  └─ session_stats.py
+│  │  │
+│  │  └─ services/
+│  │     ├─ __init__.py
+│  │     ├─ config_manager.py
+│  │     ├─ display_manager.py
+│  │     ├─ event_manager.py
+│  │     ├─ input_manager.py
+│  │     ├─ scene_manager.py
+│  │     ├─ service_locator.py
+│  │     └─ settings_manager.py
 │  │
 │  ├─ entities/
-│  │   ├─ __init__.py
-│  │   ├─ base_entity.py
-│  │   ├─ entity_registry.py
-│  │   ├─ entity_state.py
-│  │   ├─ status_manager.py
-│  │   │
-│  │   ├─ bullets/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ base_bullet.py
-│  │   │  └─ bullet_straight.py
-│  │   │
-│  │   ├─ enemies/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ base_enemy.py
-│  │   │  └─ enemy_straight.py
-│  │   │
-│  │   └─ player/
-│  │      ├─ __init__.py
-│  │      ├─ player_ability.py
-│  │      ├─ player_core.py
-│  │      ├─ player_logic.py
-│  │      ├─ player_movement.py
-│  │      └─ player_state.py
+│  │  ├─ __init__.py
+│  │  ├─ base_entity.py
+│  │  ├─ entity_state.py
+│  │  ├─ entity_types.py
+│  │  ├─ state_manager.py
+│  │  │
+│  │  ├─ bullets/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ base_bullet.py
+│  │  │  └─ bullet_straight.py
+│  │  │
+│  │  ├─ enemies/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ base_enemy.py
+│  │  │  ├─ enemy_homing.py
+│  │  │  ├─ enemy_straight.py
+│  │  │  ├─ enemy_waypoint.py
+│  │  │  └─ waypoint_shooter.py
+│  │  │
+│  │  ├─ environments/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ base_hazard.py
+│  │  │  └─ base_obstacle.py
+│  │  │
+│  │  ├─ items/
+│  │  │  ├─ __init__.py
+│  │  │  └─ base_item.py
+│  │  │
+│  │  └─ player/
+│  │     ├─ __init__.py
+│  │     ├─ player_ability.py
+│  │     ├─ player_core.py
+│  │     ├─ player_effects.py
+│  │     ├─ player_logic.py
+│  │     ├─ player_movement.py
+│  │     └─ player_state.py
 │  │
 │  ├─ graphics/
-│  │   ├─ __init__.py
-│  │   ├─ draw_manager.py
-│  │   │
-│  │   └─ animations/
-│  │      ├─ __init__.py
-│  │      ├─ animation_controller.py
-│  │      ├─ animation_manager.py
-│  │      │
-│  │      ├─ animation_effects/
-│  │      │  ├─ __init__.py
-│  │      │  ├─ common_animation.py
-│  │      │  ├─ damage_animation.py
-│  │      │  ├─ death_animation.py
-│  │      │  └─ movement_animation.py
-│  │      │
-│  │      └─ entities/
-│  │         ├─ __init__.py
-│  │         ├─ enemy_animation.py
-│  │         └─ player_animation.py
+│  │  ├─ __init__.py
+│  │  ├─ background_manager.py
+│  │  ├─ draw_manager.py
+│  │  │
+│  │  ├─ animations/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ animation_data.py
+│  │  │  ├─ animation_manager.py
+│  │  │  ├─ animation_registry.py
+│  │  │  │
+│  │  │  ├─ animation_effects/
+│  │  │  │  ├─ __init__.py
+│  │  │  │  ├─ common_animation.py
+│  │  │  │  ├─ damage_animation.py
+│  │  │  │  ├─ death_animation.py
+│  │  │  │  └─ movement_animation.py
+│  │  │  │
+│  │  │  └─ entities_animation/
+│  │  │     ├─ __init__.py
+│  │  │     ├─ enemy_animation.py
+│  │  │     └─ player_animation.py
+│  │  │
+│  │  └─ particles/
+│  │     ├─ __init__.py
+│  │     └─ particle_manager.py
 │  │
 │  ├─ scenes/
-│  │   ├─ __init__.py
-│  │   ├─ game_scene.py
-│  │   ├─ pause_scene.py (empty)
-│  │   └─ start_scene.py
+│  │  ├─ __init__.py
+│  │  ├─ base_scene.py
+│  │  ├─ game_scene.py
+│  │  ├─ level_up_screen.py
+│  │  ├─ main_menu_scene.py
+│  │  ├─ mission_select_scene.py
+│  │  ├─ scene_state.py
+│  │  ├─ settings_scene.py
+│  │  │
+│  │  └─ transitions/
+│  │     ├─ __init__.py
+│  │     ├─ base_transition.py
+│  │     └─ transitions.py
 │  │
 │  ├─ systems/
-│  │   ├─ __init__.py
-│  │   │
-│  │   ├─ collision/
-│  │   │  ├─ __init__.py
-│  │   │  ├─ collision_hitbox.py
-│  │   │  └─ collision_manager.py
-│  │   │
-│  │   ├─ combat/
-│  │   │  ├─ __init__.py
-│  │   │  └─ bullet_manager.py
-│  │   │
-│  │   └─ level/
-│  │      ├─ __init__.py
-│  │      ├─ level_manager.py
-│  │      ├─ pattern_registry.py
-│  │      └─ spawn_manager.py
+│  │  ├─ __init__.py
+│  │  ├─ game_system_initializer.py
+│  │  ├─ system_initializer.py
+│  │  │
+│  │  ├─ collision/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ collision_hitbox.py
+│  │  │  └─ collision_manager.py
+│  │  │
+│  │  ├─ entity_management/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ bullet_manager.py
+│  │  │  ├─ entity_registry.py
+│  │  │  ├─ item_manager.py
+│  │  │  └─ spawn_manager.py
+│  │  │
+│  │  └─ level/
+│  │     ├─ __init__.py
+│  │     ├─ level_manager.py
+│  │     ├─ level_registry.py
+│  │     ├─ pattern_registry.py
+│  │     ├─ stage_loader.py
+│  │     └─ wave_scheduler.py
 │  │
 │  └─ ui/
-│      ├─ __init__.py
-│      ├─ base_ui.py
-│      ├─ menu_manager.py (empty)
-│      ├─ ui_manager.py
-│      │
-│      ├─ components/
-│      │  ├─ __init__.py
-│      │  └─ ui_button.py
-│      │
-│      └─ effects/
-│         ├─ __init__.py
-│         ├─ ui_animation.py (empty)
-│         └─ ui_fade.py (empty)
+│     ├─ __init__.py
+│     │
+│     ├─ core/
+│     │  ├─ __init__.py
+│     │  ├─ anchor_resolver.py
+│     │  ├─ binding_system.py
+│     │  ├─ ui_element.py
+│     │  ├─ ui_loader.py
+│     │  └─ ui_manager.py
+│     │
+│     └─ elements/
+│        ├─ __init__.py
+│        ├─ bar.py
+│        ├─ button.py
+│        ├─ container.py
+│        ├─ label.py
+│        └─ needle.py
 │
-└─ assets/
-   ├─ images/
-   │   ├─ player.png (unused)
-   │   │
-   │   └─ icons/
-   │       └─ 202X_icon.png
+└─ tests/
+   ├─ __init__.py
+   ├─ conftest.py
    │
-   └─ audio/
+   ├─ entities/
+   │  ├─ __init__.py
+   │  └─ test_player_leveling.py
+   │
+   └─ ui/
+      └─ __init__.py
 ```

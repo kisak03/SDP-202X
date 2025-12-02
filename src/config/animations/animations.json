@@ -1,0 +1,31 @@
+{
+  "enemy": {
+    "death": {
+      "default": {
+        "frames": [
+          "assets/images/effects/explosions/explosion01.png",
+          "assets/images/effects/explosions/explosion02.png",
+          "assets/images/effects/explosions/explosion03.png"
+        ],
+        "scale": 0.5,
+        "duration": 0.5
+      }
+    },
+    "damage": {
+      "default": {
+        "type": "blink",
+        "duration": 0.15,
+        "blink_interval": 0.08
+      }
+    }
+  },
+  "player": {
+    "damage": {
+      "default": {
+        "type": "blink",
+        "duration": 0.5,
+        "blink_interval": 0.1
+      }
+    }
+  }
+}

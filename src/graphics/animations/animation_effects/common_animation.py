@@ -5,29 +5,32 @@ import pygame
 def fade_out(entity, t):
     """Fade entity from opaque to transparent."""
     alpha = int(255 * (1.0 - t))
-    entity.image.set_alpha(alpha)
+    # Copy image to avoid mutating shared cached surface
+    if entity.image.get_alpha() != alpha:
+        entity.image = entity.image.copy()
+        entity.image.set_alpha(alpha)
 
 
 def fade_in(entity, t):
     """Fade entity from transparent to opaque."""
     alpha = int(255 * t)
-    entity.image.set_alpha(alpha)
+    if entity.image.get_alpha() != alpha:
+        entity.image = entity.image.copy()  # Add this line
+        entity.image.set_alpha(alpha)
 
 
 def scale_down(entity, t):
     """Shrink entity to 0."""
-    if not hasattr(entity, '_original_image'):
-        entity._original_image = entity.image.copy()
-
     scale = 1.0 - t
     if scale <= 0:
         return
 
+    orig = getattr(entity, '_base_image', entity.image)
     new_size = (
-        max(1, int(entity._original_image.get_width() * scale)),
-        max(1, int(entity._original_image.get_height() * scale))
+        max(1, int(orig.get_width() * scale)),
+        max(1, int(orig.get_height() * scale))
     )
-    entity.image = pygame.transform.scale(entity._original_image, new_size)
+    entity.image = pygame.transform.scale(orig, new_size)
     entity.rect = entity.image.get_rect(center=entity.rect.center)
 
 
@@ -52,6 +55,39 @@ def blink(entity, t, interval=0.1):
         entity.image.set_alpha(0)
 
 
+# In common_animation.py
+def flash_white(entity, t, interval=0.08):
+    """
+    White flash with blinking effect.
+    Combines additive white overlay with visibility toggle.
+    """
+    # Cache base image
+    if not hasattr(entity, "_base_image") or entity._base_image is None:
+        entity._base_image = entity.image.copy()
+
+    # Flash intensity decreases over time
+    intensity = int(255 * (1.0 - t))
+
+    # Create flashed image
+    base = entity._base_image
+    flash = base.copy()
+    flash.fill((intensity, intensity, intensity), special_flags=pygame.BLEND_RGB_ADD)
+
+    # Apply blink on top of flash
+    elapsed = entity.anim_context.get("elapsed_time", 0)
+    if int(elapsed / interval) % 2 == 0:
+        flash.set_alpha(255)
+    else:
+        flash.set_alpha(0)
+
+    entity.image = flash
+
+    # Cleanup
+    if t >= 1.0:
+        entity.image = entity._base_image.copy()
+        entity.image.set_alpha(255)
+
+
 def fade_color(entity, t, start_color=(255, 0, 0), end_color=(0, 0, 0)):
     """
     Apply additive color flash overlay (e.g., red damage flash).
@@ -59,18 +95,47 @@ def fade_color(entity, t, start_color=(255, 0, 0), end_color=(0, 0, 0)):
 
     Use case: Flash red on hit, fade to normal
     """
-    if not hasattr(entity, '_original_image'):
-        entity._original_image = entity.image.copy()
+    orig = getattr(entity, '_base_image', entity.image)
 
     # Lerp flash intensity
     r = int(start_color[0] + (end_color[0] - start_color[0]) * t)
     g = int(start_color[1] + (end_color[1] - start_color[1]) * t)
     b = int(start_color[2] + (end_color[2] - start_color[2]) * t)
 
-    flash = entity._original_image.copy()
+    flash = orig.copy()
     flash.fill((r, g, b), special_flags=pygame.BLEND_RGB_ADD)
 
     # Preserve alpha (important for blink)
     current_alpha = entity.image.get_alpha()
     entity.image = flash
     entity.image.set_alpha(current_alpha)
+
+
+def sprite_cycle(entity, t):
+    """Cycle through animation frames from context."""
+    ctx = getattr(entity, 'anim_context', {})
+    frames = ctx.get('frames', [])
+
+    if not frames:
+        fade_out(entity, t)
+        return
+
+    frame_idx = min(int(t * len(frames)), len(frames) - 1)
+    entity.image = frames[frame_idx]
+    entity.rect = entity.image.get_rect(center=entity.rect.center)
+
+
+def shake(entity, t, intensity=4, frequency=30):
+    """Shake entity position. Stores original pos on first call."""
+    if not hasattr(entity, '_shake_origin'):
+        entity._shake_origin = entity.rect.center
+
+    if t < 1.0:
+        import math
+        offset_x = int(math.sin(t * frequency * math.pi) * intensity * (1 - t))
+        offset_y = int(math.cos(t * frequency * math.pi * 0.7) * intensity * (1 - t))
+        entity.rect.center = (entity._shake_origin[0] + offset_x,
+                              entity._shake_origin[1] + offset_y)
+    else:
+        entity.rect.center = entity._shake_origin
+        del entity._shake_origin

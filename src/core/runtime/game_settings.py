@@ -1,130 +1,119 @@
 """
 game_settings.py
------------
-Centralized configuration for all game systems.
+----------------
+Centralized constants for all game systems.
 """
 
 
 # ===========================================================
 # Display & Performance
 # ===========================================================
+
 class Display:
-    WIDTH = 1280
-    HEIGHT = 720
-    FPS = 60
-    CAPTION = "202X"
+    """Screen and window configuration."""
+    WIDTH: int = 1280
+    HEIGHT: int = 720
+    FPS: int = 60
+    CAPTION: str = "202X"
+
+    WINDOW_SIZES = {
+        "small": (1280, 720),
+        "medium": (1920, 1080),
+        "large": (2560, 1440),
+    }
+    DEFAULT_WINDOW_SIZE: str = "small"
+
+
+# ===========================================================
+# Font Configuration
+# ===========================================================
+
+class Fonts:
+    DIR: str = "assets/fonts"
+    DEFAULT: str = "ScienceGothic_Condensed-Light.ttf"
+    FALLBACK: str = None
 
 
 # ===========================================================
 # Physics & Timing
 # ===========================================================
+
 class Physics:
-    UPDATE_RATE = 60  # Hz
-    FIXED_DT = 1 / UPDATE_RATE
-    MAX_FRAME_TIME = 0.1  # Prevent frame spiral
+    """Physics and update timing."""
+    UPDATE_RATE: int = 60
+    FIXED_DT: float = 1 / UPDATE_RATE
+    MAX_FRAME_TIME: float = 0.1
+
+
+# ===========================================================
+# Input Configuration
+# ===========================================================
+
+class Input:
+    """Controller and input configuration."""
+    CONTROLLER_DEADZONE: float = 0.2
+    CONTROLLER_UI_THRESHOLD: float = 0.5
+
+
+# ===========================================================
+# Bounds & Margins
+# ===========================================================
+
+class Bounds:
+    """Margin values for entity lifecycle management."""
+    # Enemies
+    ENEMY_DAMAGE_MARGIN: int = 50
+    ENEMY_CLEANUP_MARGIN: int = 200
+
+    # Bullets
+    BULLET_PLAYER_MARGIN: int = 50
+    BULLET_ENEMY_MARGIN: int = 100
+
+    # Items
+    ITEM_CLEANUP_MARGIN: int = 50
+
+    # Environment
+    ENV_DAMAGE_MARGIN: int = 0
+    ENV_CLEANUP_MARGIN: int = 300
 
 
 # ===========================================================
 # Rendering Layers
 # ===========================================================
+
 class Layers:
-    BACKGROUND = 0
-    ENEMIES = 1
-    BULLETS = 2
-    PLAYER = 3
-    PARTICLES = 4
-    EFFECTS = 5
-    DEBUG = 9
-    UI = 10  # Always on top
+    """Z-order for rendering."""
+    BACKGROUND: int = 0
+    PICKUPS: int = 100
+    BULLETS: int = 200
+    ENEMIES: int = 300
+    PLAYER: int = 400
+    PARTICLES: int = 500
+    UI: int = 600
+    OVERLAY: int = 700      # Pause, game over screens
+    MODAL: int = 800    # Tint overlays (if used separately)
+    DEBUG: int = 900
 
 
 # ===========================================================
-# Player Configuration
+# Player Defaults
 # ===========================================================
+
 class Player:
-    SPEED = 300
-    FOCUSED_SPEED = 150
-    HITBOX_RADIUS = 2
+    """Player configuration defaults."""
+    SPEED: int = 300
+    FOCUSED_SPEED: int = 150
+    HITBOX_RADIUS: int = 2
 
 
 # ===========================================================
-# Debug (Visual)
+# Debug Display
 # ===========================================================
+
 class Debug:
-    """Visual debug and HUD toggles — not related to logging."""
-
-    SHOW_FPS = True
-    FRAME_TIME_WARNING = 16.67
-    HITBOX_ACTIVE = True
-    HITBOX_VISIBLE = False
-    HITBOX_LINE_WIDTH = 5
-
-
-# ===========================================================
-# Logger Configuration (Textual / Console Logging)
-# ===========================================================
-class LoggerConfig:
-    """
-    Controls which components emit log messages and at what verbosity level.
-    Used by DebugLogger to decide what to print.
-    """
-
-    # Master Control
-    ENABLE_LOGGING = True
-    LOG_LEVEL = "INFO"  # NONE, ERROR, WARN, INFO, VERBOSE
-
-    # Category Filters (only current categories in use)
-    CATEGORIES = {
-        # ---------------------------------------------------
-        # Core Engine Systems
-        # ---------------------------------------------------
-        "loading": False,
-        "system": True,              # General runtime lifecycle and initialization
-        "display": True,             # DisplayManager, window creation, scaling
-        "scene": True,               # SceneManager, transitions, and active scene info
-        "input": True,               # InputManager events and key handling
-        "debug_hud": True,           # DebugHUD and HUD rendering
-
-        # ---------------------------------------------------
-        # Game Loop / State
-        # ---------------------------------------------------
-        "stage": True,               # StageManager, wave control, scene flow
-        "game_state": True,          # GameState transitions and mode tracking
-        "timing": False,             # Delta time, fixed step timing, frame stats
-
-        # ---------------------------------------------------
-        # Entity & Gameplay Systems
-        # ---------------------------------------------------
-        "entity_core": True,         # BaseEntity initialization, IDs, and registration
-        "entity_logic": True,        # Common entity behavior and updates
-        "entity_spawn": False,       # SpawnManager activity and enemy waves
-        "entity_cleanup": False,     # Entity removal or offscreen cleanup
-        "collision": False,          # CollisionManager, hit detection traces
-        "bullet": True,              # BulletManager creation and pooling
-        "animation_effects": False,            # Visual/particle effect creation and cleanup
-        "animation": True,           # AnimationManager initialization and updates
-
-        # ---------------------------------------------------
-        # Rendering & Drawing
-        # ---------------------------------------------------
-        "drawing": False,             # DrawManager operations and layer sorting
-        "render": True,              # Display render pipeline and scaling logs
-
-        # ---------------------------------------------------
-        # User / Interaction
-        # ---------------------------------------------------
-        "user_action": False,        # Player input, UI interactions
-        "ui": True,                  # UIManager, button states, and transitions
-
-        # ---------------------------------------------------
-        # Optional / Experimental
-        # ---------------------------------------------------
-        "performance": False,        # FPS / frame time diagnostics
-        "audio": False               # SoundManager (placeholder)
-    }
-
-    # Output Style
-    SHOW_TIMESTAMP = True
-    SHOW_CATEGORY = True
-    SHOW_LEVEL = True
-    # Optional: SAVE_TO_FILE = False
+    """Visual debug toggles -- not related to logging."""
+    SHOW_FPS: bool = True
+    FRAME_TIME_WARNING: float = 16.67
+    HITBOX_VISIBLE: bool = False
+    HITBOX_LINE_WIDTH: int = 5
+    PROFILING_ENABLED: bool = False

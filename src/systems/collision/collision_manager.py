@@ -14,286 +14,332 @@ Responsibilities
 - Provide optional hitbox debug visualization.
 """
 
-from src.core.runtime.game_settings import Debug
+import pygame
+
+from src.core.runtime.game_settings import Debug, Display
 from src.core.debug.debug_logger import DebugLogger
-from src.entities.entity_state import LifecycleState
-from src.entities.player.player_state import InteractionState
+
+from src.entities.entity_state import LifecycleState, InteractionState
+
 from src.systems.collision.collision_hitbox import CollisionHitbox
 
 
 class CollisionManager:
     """Detects collisions but lets objects decide what happens."""
 
-    # ===========================================================
-    # Configuration
-    # ===========================================================
     BASE_CELL_SIZE = 64
     NEIGHBOR_OFFSETS = [
         (0, 0), (1, 0), (-1, 0), (0, 1), (0, -1),
         (1, 1), (-1, 1), (1, -1), (-1, -1)
     ]
 
-    # ===========================================================
-    # Initialization
-    # ===========================================================
     def __init__(self, player, bullet_manager, spawn_manager):
-        """
-        Initialize the collision manager and register key systems.
-
-        Args:
-            player: Player entity instance to include in collision checks.
-            bullet_manager: Reference to the BulletManager containing active bullets.
-            spawn_manager: Reference to the SpawnManager containing active enemies.
-        """
         self.player = player
         self.bullet_manager = bullet_manager
         self.spawn_manager = spawn_manager
         self.CELL_SIZE = self.BASE_CELL_SIZE
 
-        # Collision rules
         self.rules = {
             ("player", "enemy"),
+            ("player", "pickup"),
             ("player_bullet", "enemy"),
             ("enemy_bullet", "player"),
-            ("player_bullet", "enemy_bullet"),
+            # ("player_bullet", "enemy_bullet"),
+            ("shield", "enemy"),
+            ("shield", "enemy_bullet"),
         }
 
-        # Centralized hitbox registry
-        self.hitboxes = {}  # {entity_id: CollisionHitbox}
+        self.hitboxes = {}
+        self._collisions = []
+        self._checked_pairs = set()
+
+        self._entity_cache = {}
+
+        # [OPTIMIZATION] Pre-allocated 1D spatial grid
+        self.GRID_COLS = (Display.WIDTH + self.CELL_SIZE * 2) // self.CELL_SIZE + 1
+        self.GRID_ROWS = (Display.HEIGHT + self.CELL_SIZE * 2) // self.CELL_SIZE + 1
+        self.TOTAL_CELLS = self.GRID_COLS * self.GRID_ROWS
+        self._grid = [[] for _ in range(self.TOTAL_CELLS)]
 
         DebugLogger.init_entry("CollisionManager Initialized")
 
     # ===========================================================
     # Hitbox Lifecycle Management
     # ===========================================================
-    def register_hitbox(self, entity, scale=1.0, size=None, offset=(0, 0)):
-        """
-        Create and register a hitbox for an entity.
+    def register_hitbox(self, entity, scale=None, offset=(0, 0), shape=None, shape_params=None):
+        """Create and register a hitbox for an entity."""
+        # Extract from entity if not provided (allows overrides)
+        scale = scale if scale is not None else getattr(entity, 'hitbox_scale', 1.0)
+        shape = shape if shape is not None else getattr(entity, 'hitbox_shape', 'rect')
+        shape_params = shape_params if shape_params is not None else getattr(entity, 'hitbox_params', {})
 
-        Args:
-            entity: The entity to create a hitbox for.
-            scale: Scale factor relative to entity.rect (default: 1.0).
-            size: Explicit (width, height) tuple, overrides scale if provided.
-            offset: (x, y) offset from entity center in pixels.
+        hitbox = CollisionHitbox(entity, scale=scale, offset=offset,
+                                 shape=shape, shape_params=shape_params)
 
-        Returns:
-            CollisionHitbox: The created hitbox instance.
-        """
-
-        # Create hitbox with scale
-        hitbox = CollisionHitbox(entity, scale=scale, offset=offset)
-
-        # Override with explicit size if provided (switches to manual mode)
-        if size:
-            hitbox.set_size(*size)
-
-        # Register in centralized registry
         self.hitboxes[id(entity)] = hitbox
+        entity.hitbox = hitbox  # Store back-reference
+
+        # Cache frequently-accessed attributes for hot path optimization
+        entity_id = id(entity)
+        self._entity_cache[entity_id] = {
+            "collision_tag": getattr(entity, "collision_tag", None),
+            "has_state": hasattr(entity, 'state'),
+        }
 
         DebugLogger.trace(f"Registered hitbox for {type(entity).__name__}")
         return hitbox
 
     def unregister_hitbox(self, entity):
-        """
-        Remove hitbox when entity is destroyed.
-
-        Args:
-            entity: The entity whose hitbox to remove.
-        """
+        """Remove hitbox when entity is destroyed."""
         entity_id = id(entity)
         if entity_id in self.hitboxes:
             del self.hitboxes[entity_id]
+            # Clean cache entry
+            self._entity_cache.pop(entity_id, None)
             DebugLogger.trace(f"Unregistered hitbox for {type(entity).__name__}")
 
     def get_hitbox(self, entity):
-        """
-        Get the hitbox for an entity.
-
-        Args:
-            entity: The entity to get hitbox for.
-
-        Returns:
-            CollisionHitbox or None if not registered.
-        """
+        """Get the hitbox for an entity."""
         return self.hitboxes.get(id(entity))
 
     def update(self):
         """
         Update all registered hitboxes to match entity positions.
-        Automatically cleans up hitboxes for dead entities_animation.
+        Automatically cleans up hitboxes for dead entities.
         """
-        for entity_id, hitbox in list(self.hitboxes.items()):
-            # Clean up hitboxes for dead entities_animation
-            entity = hitbox.owner
-            if getattr(entity, "death_state", 0) >= LifecycleState.DEAD:
-                del self.hitboxes[entity_id]
-                continue
-
+        for hitbox in self.hitboxes.values():
+            # Trust that dead entities have been unregistered
             # Update hitbox position/size
             hitbox.update()
 
     # ===========================================================
     # Utility: Grid Assignment
     # ===========================================================
-    def _add_to_grid(self, grid, obj):
+    def _add_to_grid(self, obj):
         """
-        Assign an entity to a grid cell based on its hitbox.
+        [OPTIMIZATION] Assign entity to 1D grid using offset coordinates.
 
-        Args:
-            grid: Spatial hash table mapping cell → list of entities_animation.
-            obj: Any entity with a registered hitbox.
+        Grid coordinate system:
+        - Logical grid origin is at (-CELL_SIZE, -CELL_SIZE)
+        - This allows entities at negative positions (off-screen spawns)
+        - Adding CELL_SIZE shifts coordinates into positive range
         """
         hitbox = self.hitboxes.get(id(obj))
         if not hitbox:
             return
 
         rect = hitbox.rect
-        start_x = int(rect.left // self.CELL_SIZE)
-        end_x   = int(rect.right // self.CELL_SIZE)
-        start_y = int(rect.top // self.CELL_SIZE)
-        end_y   = int(rect.bottom // self.CELL_SIZE)
+
+        # [CRITICAL] Add CELL_SIZE offset to handle negative coordinates
+        start_x = int((rect.left + self.CELL_SIZE) // self.CELL_SIZE)
+        end_x = int((rect.right + self.CELL_SIZE) // self.CELL_SIZE)
+        start_y = int((rect.top + self.CELL_SIZE) // self.CELL_SIZE)
+        end_y = int((rect.bottom + self.CELL_SIZE) // self.CELL_SIZE)
+
+        max_col = self.GRID_COLS - 1
+        max_row = self.GRID_ROWS - 1
 
         for cx in range(start_x, end_x + 1):
             for cy in range(start_y, end_y + 1):
-                grid.setdefault((cx, cy), []).append(obj)
+                if 0 <= cx <= max_col and 0 <= cy <= max_row:
+                    index = cx + cy * self.GRID_COLS
+                    self._grid[index].append(obj)
 
     # ===========================================================
     # Optimized Collision Detection
     # ===========================================================
     def detect(self):
-        """
-        Optimized collision detection using spatial hashing.
+        """[OPTIMIZED] Collision detection using fixed-array spatial hashing."""
+        if not self.spawn_manager:
+            return self._collisions
 
-        Groups entities_animation by screen regions to minimize redundant checks.
-        Delegates all responses to each entity's on_collision() method.
+        self._collisions.clear()
 
-        Returns:
-            list[tuple]: List of (object_a, object_b) pairs that have collided.
-        """
+        # [OPTIMIZATION] Clear buckets without reallocation
+        for bucket in self._grid:
+            bucket.clear()
 
-        collisions = []
+        self._checked_pairs.clear()
 
-        # Pre-filter active objects
+        # Broad-phase culling
+        margin = 150
+        collision_bounds = pygame.Rect(-margin, -margin,
+                                       Display.WIDTH + margin * 2,
+                                       Display.HEIGHT + margin * 2)
+
+        # Filter active entities
         active_bullets = [
-            b for b in getattr(self.bullet_manager, "active", [])
-            if getattr(b, "death_state", 0) < LifecycleState.DEAD
+            b for b in self.bullet_manager.active
+            if collision_bounds.collidepoint(b.pos)
         ]
+
         active_entities = [
-            e for e in getattr(self.spawn_manager, "entities", [])
-            if getattr(e, "death_state", 0) < LifecycleState.DEAD
+            e for e in self.spawn_manager.entities
+            if collision_bounds.collidepoint(e.pos)
         ]
-        player = self.player if getattr(self.player, "death_state", 0) < LifecycleState.DEAD else None
+
+        # Cache player alive check
+        player = None
+        if self.player and self.player.death_state < LifecycleState.DEAD:
+            player = self.player
 
         total_entities = len(active_bullets) + len(active_entities) + (1 if player else 0)
+
         if total_entities == 0:
-            return collisions
+            return self._collisions
 
-        # Dynamic grid size adjustment
-        if total_entities > 800:
-            self.CELL_SIZE = 48
-        elif total_entities < 100:
-            self.CELL_SIZE = 96
-        else:
-            self.CELL_SIZE = self.BASE_CELL_SIZE
-
-        # Build Spatial Grid
-        grid = {}
+        # Build spatial grid
         add_to_grid = self._add_to_grid
 
         if player:
-            add_to_grid(grid, player)
+            add_to_grid(player)
         for entity in active_entities:
-            if entity is player:
-                DebugLogger.warn("WARNING: Player found in spawn_manager entities!")
-                continue
-            add_to_grid(grid, entity)
-
+            if entity is not player:
+                add_to_grid(entity)
         for bullet in active_bullets:
-            add_to_grid(grid, bullet)
+            add_to_grid(bullet)
 
-        # Localized Collision Checks (per cell + neighbors)
-        checked_pairs = set()
-        append_collision = collisions.append
+        # Collision detection
+        append_collision = self._collisions.append
         get_hitbox = self.hitboxes.get
+        checked_pairs = self._checked_pairs
 
-        for cell_key, cell_objects in grid.items():
+        for index in range(self.TOTAL_CELLS):
+            cell_objects = self._grid[index]
+            if not cell_objects:
+                continue
+
+            cx = index % self.GRID_COLS
+            cy = index // self.GRID_COLS
+
             for dx, dy in self.NEIGHBOR_OFFSETS:
-                neighbor_key = (cell_key[0] + dx, cell_key[1] + dy)
-                neighbor_objs = grid.get(neighbor_key)
-                if not neighbor_objs:
+                neighbor_x = cx + dx
+                neighbor_y = cy + dy
+
+                if not (0 <= neighbor_x < self.GRID_COLS and
+                        0 <= neighbor_y < self.GRID_ROWS):
                     continue
 
+                neighbor_index = neighbor_x + neighbor_y * self.GRID_COLS
+                neighbor_objs = self._grid[neighbor_index]
+
                 for a in cell_objects:
-                    a_hitbox = get_hitbox(id(a))
-                    if not a_hitbox or not getattr(a_hitbox, "active", True):
+                    a_id = id(a)
+                    a_hitbox = get_hitbox(a_id)
+                    if not a_hitbox or not a_hitbox.active:
                         continue
+
+                    a_cache = self._entity_cache.get(a_id, {})
+                    a_tag = a_cache.get("collision_tag")
 
                     for b in neighbor_objs:
                         if a is b:
                             continue
 
-                        b_hitbox = get_hitbox(id(b))
-                        if not b_hitbox or not getattr(b_hitbox, "active", True):
-                            continue
+                        b_id = id(b)
+                        pair_key = (a_id, b_id) if a_id < b_id else (b_id, a_id)
 
-                        # Avoid redundant duplicate checks
-                        pair_key = tuple(sorted((id(a), id(b))))
                         if pair_key in checked_pairs:
                             continue
                         checked_pairs.add(pair_key)
 
-                        # Skip destroyed entities_animation mid-frame
-                        if a.death_state >= LifecycleState.DEAD or b.death_state >= LifecycleState.DEAD:
+                        b_hitbox = get_hitbox(b_id)
+                        if not b_hitbox or not b_hitbox.active:
                             continue
 
-                        # Tag-based collision filtering
-                        tag_a = getattr(a, "collision_tag", None)
-                        tag_b = getattr(b, "collision_tag", None)
-                        if (tag_a, tag_b) not in self.rules and (tag_b, tag_a) not in self.rules:
+                        b_cache = self._entity_cache.get(b_id, {})
+                        b_tag = b_cache.get("collision_tag")
+
+                        if (a_tag, b_tag) not in self.rules and (b_tag, a_tag) not in self.rules:
                             continue
 
-                        if (getattr(a, "state", 0) >= InteractionState.INTANGIBLE or
-                                getattr(b, "state", 0) >= InteractionState.INTANGIBLE):
+                        # Check state if entities have it (some entities like items may not)
+                        a_state = getattr(a, 'state', InteractionState.DEFAULT)
+                        b_state = getattr(b, 'state', InteractionState.DEFAULT)
+
+                        if a_state >= InteractionState.INTANGIBLE or b_state >= InteractionState.INTANGIBLE:
                             continue
 
-                        # Overlap test
-                        if a_hitbox.rect.colliderect(b_hitbox.rect):
+                        if self._check_collision(a_hitbox, b_hitbox):
+                            a_collision_tag = a_tag
+                            b_collision_tag = b_tag
+
                             append_collision((a, b))
-                            DebugLogger.state(
-                                f"Collision: {type(a).__name__} ({tag_a}) <-> {type(b).__name__} ({tag_b})",
-                                category="collision",
-                            )
+                            self._process_collision(a, b, a_collision_tag, b_collision_tag)
 
-                            # Let entities_animation handle their reactions
-                            try:
-                                if hasattr(a, "on_collision"):
-                                    a.on_collision(b)
+        return self._collisions
 
-                                if hasattr(b, "on_collision"):
-                                    b.on_collision(a)
+    # ===========================================================
+    # Collision Processing
+    # ===========================================================
+    def _process_collision(self, entity_a, entity_b, tag_a, tag_b):
+        """Route collision based on categories."""
+        try:
+            # Pass original collision tag to prevent race conditions
+            if hasattr(entity_a, "on_collision"):
+                entity_a.on_collision(entity_b, collision_tag=tag_b)
 
-                            except Exception as e:
-                                DebugLogger.warn(
-                                    f"[CollisionManager] Exception during collision between "
-                                    f"{type(a).__name__} and {type(b).__name__}: {e}",
-                                    category="collision"
-                                )
-        return collisions
+            if hasattr(entity_b, "on_collision"):
+                entity_b.on_collision(entity_a, collision_tag=tag_a)
+
+        except Exception as e:
+            DebugLogger.warn(
+                f"Error {type(entity_a).__name__} <-> {type(entity_b).__name__}: {e}",
+            )
+
+    def _check_collision(self, hitbox_a, hitbox_b):
+        """Check collision between two hitboxes (AABB or OBB)."""
+        if not hitbox_a.use_obb and not hitbox_b.use_obb:
+            return hitbox_a.rect.colliderect(hitbox_b.rect)
+        return self._obb_collision(hitbox_a, hitbox_b)
+
+    def _obb_collision(self, hitbox_a, hitbox_b):
+        """SAT collision check for oriented bounding boxes."""
+        corners_a = hitbox_a.get_obb_corners()
+        corners_b = hitbox_b.get_obb_corners()
+
+        # Collect axes from both shapes
+        axes = []
+        for i in range(len(corners_a)):
+            p1 = corners_a[i]
+            p2 = corners_a[(i + 1) % len(corners_a)]
+            edge = (p2[0] - p1[0], p2[1] - p1[1])
+            axes.append((-edge[1], edge[0])) # Normal
+
+        for i in range(len(corners_b)):
+            p1 = corners_b[i]
+            p2 = corners_b[(i + 1) % len(corners_b)]
+            edge = (p2[0] - p1[0], p2[1] - p1[1])
+            axes.append((-edge[1], edge[0]))
+
+        # Project and check overlap
+        for axis in axes:
+            # Normalize axis (optional but good for stability)
+            length = (axis[0]**2 + axis[1]**2)**0.5
+            if length == 0: continue
+            axis = (axis[0]/length, axis[1]/length)
+
+            # Project A
+            proj_a = [c[0]*axis[0] + c[1]*axis[1] for c in corners_a]
+            min_a, max_a = min(proj_a), max(proj_a)
+
+            # Project B
+            proj_b = [c[0]*axis[0] + c[1]*axis[1] for c in corners_b]
+            min_b, max_b = min(proj_b), max(proj_b)
+
+            if max_a < min_b or max_b < min_a:
+                return False # Gap found
+
+        return True
 
     # ===========================================================
     # Debug Visualization
     # ===========================================================
     def draw_debug(self, surface):
-        """
-        Draw hitboxes for all registered entities_animation if debug mode is enabled.
-
-        Args:
-            surface: The rendering surface to draw onto.
-        """
+        """Draw hitboxes if debug enabled."""
         if not Debug.HITBOX_VISIBLE:
             return
 
-        # Draw all registered hitboxes
         for hitbox in self.hitboxes.values():
-            if getattr(hitbox, "active", True):
+            if hitbox.active:
                 hitbox.draw_debug(surface)

@@ -1,0 +1,16 @@
+name: Validate PR Release Label
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled, unlabeled, opened, edited, reopened, synchronize, ready_for_review]
+jobs:
+  check-pr:
+    name: Validate Release Label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jefflinse/pr-semver-bump@v1.6.0
+        name: Validate Pull Request Metadata
+        with:
+          mode: validate
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

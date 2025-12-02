@@ -1,6 +1,7 @@
 name: Validate PR Release Label
 on:
   pull_request:
+    branches: [main]
     types: [labeled, unlabeled, opened, edited, reopened, synchronize, ready_for_review]
 jobs:
   check-pr:

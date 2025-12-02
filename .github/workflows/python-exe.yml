@@ -13,9 +13,6 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-
 jobs:
   build:
     strategy:
@@ -37,6 +34,15 @@ jobs:
     - name: pyinstaller
       run: |
         pyinstaller --onefile --noconsole main.py
+
+    - name: create a zip file (windows)
+      if: ${{ matrix.os == 'windows-latest' }}
+      run: |
+        tar -acf dist.zip ./dist
+
+    - name: create a zip file (mac os)
+      if: ${{ matrix.os == 'macos-latest' }}
+      run: |
         zip -r dist.zip ./dist
 
     - name: Upload artifact (windows)

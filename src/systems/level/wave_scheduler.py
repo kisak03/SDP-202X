@@ -28,17 +28,19 @@ class WaveScheduler:
     """Handles wave spawning, timing, and position calculation."""
 
     ALLOWED_PARAMS = {
-        'waypoints',
-        'direction',
-        'player_ref',
-        'spawn_edge',
+        "waypoints",
+        "direction",
+        "player_ref",
+        "spawn_edge",
         # Waypoint shooter params
-        'shoot_interval',
-        'bullet_speed',
-        'waypoint_speed',
+        "shoot_interval",
+        "bullet_speed",
+        "waypoint_speed",
     }
 
-    def __init__(self, spawn_manager, player_ref=None, bullet_manager=None):
+    def __init__(
+        self, spawn_manager, player_ref=None, bullet_manager=None, hazard_manager=None
+    ):
         """
         Initialize wave scheduler.
 
@@ -46,10 +48,12 @@ class WaveScheduler:
             spawn_manager: SpawnManager for entity creation
             player_ref: Player entity reference for homing/targeting
             bullet_manager: BulletManager for shooting enemies
+            hazard_manager: HazardManager for boss hazards
         """
         self.spawner = spawn_manager
         self.player = player_ref
         self.bullet_manager = bullet_manager
+        self.hazard_manager = hazard_manager
 
         # Wave state
         self.waves = []
@@ -111,8 +115,9 @@ class WaveScheduler:
         self._process_deferred_spawns()
 
         # Check if any waves should trigger
-        while (self.wave_idx < len(self.waves) and
-               stage_timer >= self.waves[self.wave_idx].get("time", 0)):
+        while self.wave_idx < len(self.waves) and stage_timer >= self.waves[
+            self.wave_idx
+        ].get("time", 0):
             self._trigger_wave(self.waves[self.wave_idx])
             self.wave_idx += 1
 
@@ -142,8 +147,7 @@ class WaveScheduler:
         # VALIDATION: Check wave structure
         if not isinstance(wave, dict):
             DebugLogger.warn(
-                f"[WaveScheduler] Invalid wave type: {type(wave)}",
-                category="level"
+                f"[WaveScheduler] Invalid wave type: {type(wave)}", category="level"
             )
             return
 
@@ -158,24 +162,21 @@ class WaveScheduler:
             entity_params = wave.get("item_params", {})
         else:
             DebugLogger.warn(
-                "[WaveScheduler] Wave missing 'enemy' or 'pickup' key",
-                category="level"
+                "[WaveScheduler] Wave missing 'enemy' or 'pickup' key", category="level"
             )
             return
 
         # VALIDATION: Required parameters
         if not entity_type:
             DebugLogger.warn(
-                "[WaveScheduler] Wave has empty entity_type",
-                category="level"
+                "[WaveScheduler] Wave has empty entity_type", category="level"
             )
             return
 
         count = wave.get("count", 1)
         if count <= 0:
             DebugLogger.warn(
-                f"[WaveScheduler] Invalid count: {count}",
-                category="level"
+                f"[WaveScheduler] Invalid count: {count}", category="level"
             )
             return
 
@@ -191,7 +192,7 @@ class WaveScheduler:
         if not positions:
             DebugLogger.warn(
                 f"[WaveScheduler] No valid positions for wave {entity_type} (pattern: {pattern})",
-                category="level"
+                category="level",
             )
             return
 
@@ -213,12 +214,21 @@ class WaveScheduler:
                 base_params["player_ref"] = self.player
                 base_params["bullet_manager"] = self.bullet_manager
 
+            # Inject references for boss
+            if entity_type == "boss":
+                base_params["player_ref"] = self.player
+                base_params["bullet_manager"] = self.bullet_manager
+                base_params["hazard_manager"] = self.hazard_manager
+
             # Merge movement params with priority system:
             # 1. Explicit enemy_params.direction (highest priority)
             # 2. Movement config direction
             # 3. Auto-direction from spawn_edge (lowest priority)
             if not needs_position_calc:
-                if "direction" not in base_params or base_params.get("direction") is None:
+                if (
+                    "direction" not in base_params
+                    or base_params.get("direction") is None
+                ):
                     if movement_params.get("direction") is not None:
                         base_params.update(movement_params)
                 elif "homing" in movement_params:
@@ -256,17 +266,19 @@ class WaveScheduler:
                 spawn_kwargs = {}
                 if spawn_edge:
                     # Only use auto-direction if direction is None or homing needs edge
-                    if spawn_params.get("direction") is None or spawn_params.get("homing") == "snapshot_axis":
+                    if (
+                        spawn_params.get("direction") is None
+                        or spawn_params.get("homing") == "snapshot_axis"
+                    ):
                         spawn_kwargs["spawn_edge"] = spawn_edge
 
-                self._deferred_spawns.append((
-                    category, entity_type, x, y,
-                    {**spawn_kwargs, **spawn_params}
-                ))
+                self._deferred_spawns.append(
+                    (category, entity_type, x, y, {**spawn_kwargs, **spawn_params})
+                )
 
             DebugLogger.state(
                 f"Queued {len(positions)} spawns (deferred) | Pattern: {pattern}",
-                category="level"
+                category="level",
             )
         else:
             # Immediate spawning for small waves
@@ -285,7 +297,7 @@ class WaveScheduler:
                 if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
                     DebugLogger.warn(
                         f"[WaveScheduler] Invalid position: ({x}, {y})",
-                        category="level"
+                        category="level",
                     )
                     failed += 1
                     continue
@@ -309,32 +321,39 @@ class WaveScheduler:
                 spawn_kwargs = {}
                 if spawn_edge:
                     # Only use auto-direction if direction is None or homing needs edge
-                    if spawn_params.get("direction") is None or spawn_params.get("homing") == "snapshot_axis":
+                    if (
+                        spawn_params.get("direction") is None
+                        or spawn_params.get("homing") == "snapshot_axis"
+                    ):
                         spawn_kwargs["spawn_edge"] = spawn_edge
 
-                entity = self.spawner.spawn(category, entity_type, x, y, **{**spawn_kwargs, **spawn_params})
+                entity = self.spawner.spawn(
+                    category, entity_type, x, y, **{**spawn_kwargs, **spawn_params}
+                )
 
                 if entity:
                     spawned += 1
                     if category == "enemy" and self._waiting_for_clear:
                         self._remaining_enemies += 1
+
+                    # Trigger boss intro cinematic
+                    if entity_type == "boss":
+                        from src.core.services.event_manager import BossSpawnEvent
+
+                        get_events().dispatch(BossSpawnEvent(boss_ref=entity))
                 else:
                     failed += 1
-
-            # Track enemies for wave clear
-            # if category == "enemy" and self._waiting_for_clear:
-            #     self._remaining_enemies += spawned
 
             # Report results
             if failed > 0:
                 DebugLogger.warn(
                     f"[WaveScheduler] Wave spawn incomplete: {spawned} succeeded, {failed} failed",
-                    category="level"
+                    category="level",
                 )
 
             DebugLogger.state(
                 f"Wave: {entity_type} x{spawned}/{count} | Pattern: {pattern}",
-                category="level"
+                category="level",
             )
 
     # ===========================================================
@@ -358,8 +377,7 @@ class WaveScheduler:
         if "formation" in wave:
             if "spawn_edge" not in wave:
                 DebugLogger.warn(
-                    "[WaveScheduler] Formation requires 'spawn_edge'",
-                    category="level"
+                    "[WaveScheduler] Formation requires 'spawn_edge'", category="level"
                 )
                 return []
             return self._positions_from_formation(wave)
@@ -370,7 +388,7 @@ class WaveScheduler:
 
         DebugLogger.warn(
             "[WaveScheduler] Wave has no position config (spawn_edge, formation, or pattern)",
-            category="level"
+            category="level",
         )
         return []
 
@@ -437,21 +455,21 @@ class WaveScheduler:
             # Pattern not found
             DebugLogger.warn(
                 f"[WaveScheduler] Pattern '{pattern_name}' not registered: {e}",
-                category="level"
+                category="level",
             )
             return []
         except (ValueError, TypeError) as e:
             # Invalid parameters
             DebugLogger.warn(
                 f"[WaveScheduler] Pattern '{pattern_name}' invalid config: {e}",
-                category="level"
+                category="level",
             )
             return []
         except Exception as e:
             # Other errors
             DebugLogger.warn(
                 f"[WaveScheduler] Pattern '{pattern_name}' failed: {e}",
-                category="level"
+                category="level",
             )
             return []
 
@@ -473,17 +491,17 @@ class WaveScheduler:
         if move_type == "homing_continuous":
             return False, {
                 "homing": True,
-                "turn_rate": movement.get("params", {}).get("turn_rate", 180)
+                "turn_rate": movement.get("params", {}).get("turn_rate", 180),
             }
         elif move_type == "homing_snapshot":
             return False, {
                 "homing": "snapshot",
-                "lock_delay": movement.get("params", {}).get("lock_delay", 0.5)
+                "lock_delay": movement.get("params", {}).get("lock_delay", 0.5),
             }
         elif move_type == "homing_snapshot_axis":
             return False, {
                 "homing": "snapshot_axis",
-                "lock_delay": movement.get("params", {}).get("lock_delay", 0.5)
+                "lock_delay": movement.get("params", {}).get("lock_delay", 0.5),
             }
         elif move_type == "straight":
             if target == "auto":
@@ -497,7 +515,9 @@ class WaveScheduler:
 
         return False, {"direction": (0, 1)}
 
-    def _calculate_position_dependent_direction(self, x: float, y: float, target: str) -> dict:
+    def _calculate_position_dependent_direction(
+        self, x: float, y: float, target: str
+    ) -> dict:
         """Calculate direction based on position and target."""
         if target == "center":
             return {"direction": self._direction_to_center(x, y)}
@@ -508,7 +528,7 @@ class WaveScheduler:
             if target:  # Only warn if target was specified
                 DebugLogger.warn(
                     f"[WaveScheduler] Unknown movement target '{target}' - using default down",
-                    category="level"
+                    category="level",
                 )
             return {"direction": (0, 1)}
 
@@ -532,12 +552,12 @@ class WaveScheduler:
         if not self.player:
             DebugLogger.warn(
                 "[WaveScheduler] Player reference missing - using center targeting fallback",
-                category="level"
+                category="level",
             )
             return self._direction_to_center(x, y)
 
         # FIXED: Check if player is dead
-        if hasattr(self.player, 'death_state'):
+        if hasattr(self.player, "death_state"):
             if self.player.death_state >= LifecycleState.DEAD:
                 return self._direction_to_center(x, y)
 
@@ -564,7 +584,7 @@ class WaveScheduler:
         if queue_len > MAX_QUEUE_SIZE:
             DebugLogger.warn(
                 f"[WaveScheduler] EMERGENCY DRAIN: Queue at {queue_len}, processing all at once",
-                category="level"
+                category="level",
             )
             # Emergency: drain entire queue
             batch_size = queue_len
@@ -575,7 +595,7 @@ class WaveScheduler:
         if queue_len > 100:
             DebugLogger.warn(
                 f"[WaveScheduler] Deferred spawn queue: {queue_len} pending",
-                category="level"
+                category="level",
             )
 
         spawned = 0
@@ -595,7 +615,7 @@ class WaveScheduler:
         if failed > 0:
             DebugLogger.warn(
                 f"[WaveScheduler] {failed}/{batch_size} deferred spawns failed this frame",
-                category="level"
+                category="level",
             )
 
     # ===========================================================
@@ -608,7 +628,7 @@ class WaveScheduler:
             return
 
         # FIXED: Safe category check
-        category = getattr(entity, 'category', None)
+        category = getattr(entity, "category", None)
         if category == EntityCategory.ENEMY:
             self._remaining_enemies -= 1
 
@@ -616,8 +636,7 @@ class WaveScheduler:
         """Handle spawn pause/resume events."""
         self._spawn_paused = event.paused
         DebugLogger.action(
-            f"Spawning {'paused' if event.paused else 'resumed'}",
-            category="level"
+            f"Spawning {'paused' if event.paused else 'resumed'}", category="level"
         )
 
     # ===========================================================
@@ -646,8 +665,7 @@ class WaveScheduler:
 
         except Exception as e:
             DebugLogger.warn(
-                f"Failed to import {category}:{type_name} - {e}",
-                category="level"
+                f"Failed to import {category}:{type_name} - {e}", category="level"
             )
 
     def _positions_from_formation(self, wave: dict) -> list:
@@ -684,19 +702,19 @@ class WaveScheduler:
         except KeyError as e:
             DebugLogger.warn(
                 f"[WaveScheduler] Formation '{formation_name}' not registered: {e}",
-                category="level"
+                category="level",
             )
             return []
         except (ValueError, TypeError) as e:
             DebugLogger.warn(
                 f"[WaveScheduler] Formation '{formation_name}' invalid config: {e}",
-                category="level"
+                category="level",
             )
             return []
         except Exception as e:
             DebugLogger.warn(
                 f"[WaveScheduler] Formation '{formation_name}' failed: {e}",
-                category="level"
+                category="level",
             )
             return []
 
@@ -718,7 +736,7 @@ class WaveScheduler:
         if blocked:
             DebugLogger.trace(
                 f"Blocked stat overrides: {blocked} (use enemies.json)",
-                category="level"
+                category="level",
             )
 
         return filtered

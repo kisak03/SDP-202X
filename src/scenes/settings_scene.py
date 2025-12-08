@@ -15,11 +15,13 @@ class SettingsScene(BaseScene):
     BACKGROUNDS_PATH = "assets/images/backgrounds/"
 
     BACKGROUND_CONFIG = {
-        "layers": [{
-            "image": BACKGROUNDS_PATH + "settings_menu.png",
-            "scroll_speed": [0, 0],
-            "parallax": [0, 0]
-        }]
+        "layers": [
+            {
+                "image": BACKGROUNDS_PATH + "settings_menu.png",
+                "scroll_speed": [0, 0],
+                "parallax": [0, 0],
+            }
+        ]
     }
 
     def __init__(self, services, caller_scene=None):
@@ -52,6 +54,14 @@ class SettingsScene(BaseScene):
         """Update settings UI."""
         self._update_background(dt)
 
+        # ESC key to go back
+        if self.input_manager.action_pressed("back"):
+            if self.caller_scene == "Pause":
+                self.scene_manager.pop_scene()
+            else:
+                self.scene_manager.set_scene("MainMenu", transition=FadeTransition(0.3))
+            return
+
         mouse_pos = self.input_manager.get_effective_mouse_pos()
         self.ui.update(dt, mouse_pos)
 
@@ -66,9 +76,12 @@ class SettingsScene(BaseScene):
         if action:
             # List of actions that change volume level
             volume_actions = [
-                "master_vol_down", "master_vol_up",
-                "bgm_vol_down", "bgm_vol_up",
-                "bfx_vol_down", "bfx_vol_up"
+                "master_vol_down",
+                "master_vol_up",
+                "bgm_vol_down",
+                "bgm_vol_up",
+                "bfx_vol_down",
+                "bfx_vol_up",
             ]
 
             if action in volume_actions:
@@ -80,8 +93,9 @@ class SettingsScene(BaseScene):
                     self.scene_manager.pop_scene()
                 else:
                     # Return to main menu
-                    target = self.caller_scene if self.caller_scene else "MainMenu"
-                    self.scene_manager.set_scene("MainMenu", transition=FadeTransition(0.3))
+                    self.scene_manager.set_scene(
+                        "MainMenu", transition=FadeTransition(0.3)
+                    )
 
             elif action == "toggle_fullscreen":
                 # Toggle fullscreen via display manager
@@ -99,9 +113,13 @@ class SettingsScene(BaseScene):
             elif action == "apply_settings":
                 # Settings are applied immediately, just acknowledge
                 from src.core.debug.debug_logger import DebugLogger
+
                 DebugLogger.action("Settings applied")
 
-    def handle_ui_action(self, action_id,):
+    def handle_ui_action(
+        self,
+        action_id,
+    ):
         sound_manager = get_sound_manager()
         step = 10
 

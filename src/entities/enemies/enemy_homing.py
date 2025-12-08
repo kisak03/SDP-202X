@@ -14,6 +14,7 @@ import math
 
 from src.entities.enemies.base_enemy import BaseEnemy
 from src.entities.base_entity import BaseEntity
+from src.entities.entity_state import LifecycleState
 from src.entities.entity_types import EntityCategory
 
 from src.core.debug.debug_logger import DebugLogger
@@ -23,7 +24,14 @@ from src.systems.entity_management.entity_registry import EntityRegistry
 class EnemyHoming(BaseEnemy):
     """Enemy that tracks the player with configurable turn rates and speeds."""
 
-    __slots__ = ('turn_rate', 'player_ref', 'update_delay', 'update_timer', 'spawn_edge', 'enemy_type')
+    __slots__ = (
+        "turn_rate",
+        "player_ref",
+        "update_delay",
+        "update_timer",
+        "spawn_edge",
+        "enemy_type",
+    )
 
     __registry_category__ = EntityCategory.ENEMY
     __registry_name__ = "homing"
@@ -32,8 +40,18 @@ class EnemyHoming(BaseEnemy):
     # ===========================================================
     # Initialization
     # ===========================================================
-    def __init__(self, x, y, direction=(0, 1), speed=None, health=None,
-                 scale=None, draw_manager=None, player_ref=None, **kwargs):
+    def __init__(
+        self,
+        x,
+        y,
+        direction=(0, 1),
+        speed=None,
+        health=None,
+        scale=None,
+        draw_manager=None,
+        player_ref=None,
+        **kwargs,
+    ):
         """
         Args:
             x, y: Spawn position
@@ -49,7 +67,9 @@ class EnemyHoming(BaseEnemy):
 
         # Cache defaults per enemy type
         if enemy_type not in EnemyHoming._cached_defaults:
-            EnemyHoming._cached_defaults[enemy_type] = EntityRegistry.get_data("enemy", enemy_type)
+            EnemyHoming._cached_defaults[enemy_type] = EntityRegistry.get_data(
+                "enemy", enemy_type
+            )
         defaults = EnemyHoming._cached_defaults[enemy_type]
 
         # Apply overrides or use defaults from JSON
@@ -68,14 +88,15 @@ class EnemyHoming(BaseEnemy):
         img = BaseEntity.load_and_scale_image(image_path, scale)
 
         super().__init__(
-            x, y,
+            x,
+            y,
             image=img,
             draw_manager=draw_manager,
             speed=speed,
             health=health,
             direction=direction,
             spawn_edge=kwargs.get("spawn_edge"),
-            hitbox_config=hitbox_config
+            hitbox_config=hitbox_config,
         )
 
         # Homing configuration from JSON
@@ -93,12 +114,19 @@ class EnemyHoming(BaseEnemy):
 
         DebugLogger.init(
             f"Spawned {enemy_type} at ({x}, {y}) | Speed={speed} | Turn={turn_rate}",
-            category="animation_effects"
+            category="animation_effects",
         )
 
     # ===========================================================
     # Update Logic
     # ===========================================================
+    def update(self, dt: float):
+        """
+        Override update to enforce visual rotation towards player.
+        """
+        super().update(dt)
+        self._update_rotation()
+
     def _update_behavior(self, dt: float):
         if self.player_ref:
             if self.update_delay > 0:
@@ -109,24 +137,53 @@ class EnemyHoming(BaseEnemy):
             else:
                 self._update_homing_continuous(dt)
 
+    def _update_rotation(self):
+        """
+        Rotate the sprite to face the player visually.
+        """
+        if self.death_state != LifecycleState.ALIVE:
+            return
+
+        if not hasattr(self, "player_ref") or self.player_ref is None:
+            return
+
+        to_player = self.player_ref.pos - self.pos
+
+        if to_player.length_squared() < 1:
+            return
+
+        angle_rad = math.atan2(to_player.y, to_player.x)
+        angle_deg = math.degrees(angle_rad)
+
+        correction_angle = 90
+
+        final_angle = angle_deg + correction_angle
+
+        if hasattr(self, "_base_image") and self._base_image:
+            self.image = pygame.transform.rotate(self._base_image, -final_angle)
+            self.rect = self.image.get_rect(center=self.rect.center)
+
     def reset(self, x, y, direction=(0, 1), speed=None, health=None, **kwargs):
         """Reset enemy for pooling."""
         # Derive enemy type from registry name
         enemy_type = self.__registry_name__
         # Reload defaults for new enemy type
         if enemy_type not in EnemyHoming._cached_defaults:
-            EnemyHoming._cached_defaults[enemy_type] = EntityRegistry.get_data("enemy", enemy_type)
+            EnemyHoming._cached_defaults[enemy_type] = EntityRegistry.get_data(
+                "enemy", enemy_type
+            )
         defaults = EnemyHoming._cached_defaults[enemy_type]
 
         speed = speed if speed is not None else defaults.get("speed", 300)
         health = health if health is not None else defaults.get("hp", 3)
 
         super().reset(
-            x, y,
+            x,
+            y,
             direction=direction,
             speed=speed,
             health=health,
-            spawn_edge=kwargs.get("spawn_edge")
+            spawn_edge=kwargs.get("spawn_edge"),
         )
 
         # Update homing parameters from JSON
@@ -141,9 +198,11 @@ class EnemyHoming(BaseEnemy):
         if "spawn_edge" in kwargs:
             self.spawn_edge = kwargs["spawn_edge"]
 
+        self._rotation_enabled = False
+
     def _update_homing_continuous(self, dt):
         """Smooth turn toward player each frame (or instant snap for high turn_rate)"""
-        if not self.player_ref or not hasattr(self.player_ref, 'pos'):
+        if not self.player_ref or not hasattr(self.player_ref, "pos"):
             return
 
         # Calculate direction to player
@@ -152,7 +211,11 @@ class EnemyHoming(BaseEnemy):
             return
 
         target_dir = to_player.normalize()
-        current_dir = self.velocity.normalize() if self.velocity.length() > 0 else pygame.Vector2(0, 1)
+        current_dir = (
+            self.velocity.normalize()
+            if self.velocity.length() > 0
+            else pygame.Vector2(0, 1)
+        )
 
         # Calculate angle difference
         target_angle = math.degrees(math.atan2(target_dir.y, target_dir.x))
@@ -174,11 +237,14 @@ class EnemyHoming(BaseEnemy):
         rad = math.radians(new_angle)
         self.velocity = pygame.Vector2(math.cos(rad), math.sin(rad)) * self.speed
 
+
 class EnemyHomingSlow(EnemyHoming):
     __registry_name__ = "homing_slow"
 
+
 class EnemyHomingFast(EnemyHoming):
     __registry_name__ = "homing_fast"
+
 
 class EnemyHomingSmart(EnemyHoming):
     __registry_name__ = "homing_smart"

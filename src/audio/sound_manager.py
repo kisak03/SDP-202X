@@ -1,9 +1,9 @@
 import pygame
-
-from src.core.debug.debug_logger import DebugLogger
+import random
 from src.core.services.settings_manager import get_settings
 
 INSTANCE = None
+
 
 def get_sound_manager():
     global INSTANCE
@@ -22,9 +22,28 @@ class SoundManager:
             "enemy_destroy": "assets/audio/bfx/EnemyDestroy.wav",
             "player_destroy": "assets/audio/bfx/PlayerDestroy.wav",
             "player_shoot": "assets/audio/bfx/PlayerShoot.wav",
+            "player_damage1": "assets/audio/bfx/PlayerDamage1.wav",
+            "player_damage2": "assets/audio/bfx/PlayerDamage2.wav",
+            "player_damage3": "assets/audio/bfx/PlayerDamage3.wav",
+            "score_sound1": "assets/audio/bfx/ScoreSound1.wav",
+            "score_sound2": "assets/audio/bfx/ScoreSound2.wav",
+            "score_sound3": "assets/audio/bfx/ScoreSound3.wav",
+            "level_up": "assets/audio/bfx/LevelUpSound.wav",
             "button_click": "assets/audio/ui/ButtonClick.wav",
-        }
+            "boss_intro": "assets/audio/bfx/BossIntro.wav",
+            "boss_explosion": "assets/audio/bfx/BossExplosion.wav",
+            "boss_final_explosion": "assets/audio/bfx/BossFinalExplosion.wav",
+            "boss_charge_load": "assets/audio/bfx/BossChargeLoad.wav",
+            "boss_charge": "assets/audio/bfx/BossCharge.wav",
+            "boss_bounce_shot": "assets/audio/bfx/BossBounceShot.wav",
+            "boss_trace_player": "assets/audio/bfx/BossTracePlayer.wav",
+            "boss_trace_fire": "assets/audio/bfx/BossTraceShot.wav",
+            "boss_ratio_25": "assets/audio/bfx/BossRatio25.wav",
+            "boss_ratio_50": "assets/audio/bfx/BossRatio50.wav",
+            "boss_ratio_75": "assets/audio/bfx/BossRatio75.wav",
+        },
     }
+
     def __init__(self):
         global INSTANCE
         INSTANCE = self
@@ -36,23 +55,24 @@ class SoundManager:
         # Store UI int level separately from internal calculation float
         self.bfx_level = 100
         self.bgm_level = 100
-        self.master_level = 100 # default volume = 100
+        self.master_level = 100  # default volume = 100
 
         self.bfx_volume = 1.0
         self.bgm_volume = 1.0
         self.master_volume = 1.0
+
+        self.settings = get_settings()
         self.load_assets()
 
         self.current_bgm = None
         self.current_bgm_id = None
 
-        self.settings = get_settings()
         self.load_settings()
 
     def load_settings(self):
-        self.master_level = self.settings.get("audio", "master_level", 100)
-        self.bgm_level = self.settings.get("audio", "bgm_level", 80)
-        self.bfx_level = self.settings.get("audio", "bfx_level", 100)
+        self.master_level = self.settings.get("audio", "master_volume", 100)
+        self.bgm_level = self.settings.get("audio", "music_volume", 100)
+        self.bfx_level = self.settings.get("audio", "bfx_volume", 100)
 
         # Calculate volume(float) and Apply using int values
         self.master_volume = self.volume_scale(self.master_level)
@@ -65,36 +85,43 @@ class SoundManager:
 
     def load_assets(self):
         # DebugLogger.init("Loading Audio Assets...")
-        for name, path in self.ASSET_PATHS["bgm"].items(): # load BGM
+        for name, path in self.ASSET_PATHS["bgm"].items():  # load BGM
             self.load_bgm(name, path)
-        for name, path in self.ASSET_PATHS["bfx"].items(): # load BFX / UI sound
+        for name, path in self.ASSET_PATHS["bfx"].items():  # load BFX / UI sound
             self.load_bfx(name, path)
 
-
-    def volume_scale(self, level): # log scale volume control(0-100)
+    def volume_scale(self, level):  # natural scale volume control(0-100)
         if level < 0:
             return 0
         else:
             log_volume = (level / 100) ** 2
             return min(max(log_volume, 0.0), 1.0)
 
-    def load_bfx(self, name, route): # load BFX file
+    def load_bfx(self, name, route):  # load BFX file
         bfx_sound = self.bfx[name] = pygame.mixer.Sound(route)
         volume = self.master_volume * self.bfx_volume
         bfx_sound.set_volume(volume)
 
-    def load_bgm(self, name, route): # load BGM route
+    def load_bgm(self, name, route):  # load BGM route
         self.bgm[name] = route
 
-    def play_bfx(self, name): # play BFX
+    def play_bfx(self, name):  # play BFX
         bfx = self.bfx[name]
         bfx.play()
 
-    def play_bgm(self, name, loop): # play BGM
+    def play_bfx_loop(self, name, loop):  # play BFX for n times
+        bfx = self.bfx[name]
+        bfx.play(loops=loop)
+
+    def play_random_bfx(self, bfx_list):
+        chosen_name = random.choice(bfx_list)
+        self.play_bfx(chosen_name)
+
+    def play_bgm(self, name, loop):  # play BGM
         if self.current_bgm_id == name:
             return
         if self.current_bgm:
-                self.stop_bgm()
+            self.stop_bgm()
 
         route = self.bgm[name]
         pygame.mixer.music.load(route)
@@ -103,38 +130,43 @@ class SoundManager:
         pygame.mixer.music.play(loops=loop)
         self.current_bgm_id = name
 
-    def stop_bgm(self): # stop BGM
+    def stop_bgm(self):  # stop BGM
         pygame.mixer.music.stop()
         self.current_bgm_id = None
 
+    def stop_bfx(self, name):  # stop BFX
+        self.bfx[name].stop()
+
     # Set BFX volume (0 - 100)
     def set_bfx_volume(self, level):
-        self.bfx_level = level # int value for UI
+        self.bfx_level = level  # int value for UI
         self.bfx_volume = self.volume_scale(level)
         self.update_bfx()
 
-        self.settings.set("audio", "bfx_level", level)
+        self.settings.set("audio", "bfx_volume", level)
         self.settings.save()
 
     # Set BGM volume (0 - 100)
     def set_bgm_volume(self, level):
-        self.bgm_level = level # int value for UI
+        self.bgm_level = level  # int value for UI
         self.bgm_volume = self.volume_scale(level)
         self.update_bgm()
 
         # Save volume to settings
-        self.settings.set("audio", "bgm_level", level)
+        self.settings.set("audio", "music_volume", level)
         self.settings.save()
 
     # Set master volume (0 - 100)
-    def set_master_volume(self, level): # Set master volume
-        self.master_level = level # int value for UI
-        self.master_volume = self.volume_scale(level) # float value for sound calculations
+    def set_master_volume(self, level):  # Set master volume
+        self.master_level = level  # int value for UI
+        self.master_volume = self.volume_scale(
+            level
+        )  # float value for sound calculations
         self.update_bfx()
         self.update_bgm()
 
         # Save volume to settings
-        self.settings.set("audio", "master_level", level)
+        self.settings.set("audio", "master_volume", level)
         self.settings.save()
 
     # Update BFX
@@ -157,3 +189,6 @@ class SoundManager:
 
     def get_bfx_level(self):
         return self.bfx_level
+
+    def stop_all_bfx(self):
+        pygame.mixer.stop()

@@ -15,6 +15,7 @@ from src.core.debug.debug_logger import DebugLogger
 # Settings Manager
 # ===========================================================
 
+
 class SettingsManager:
     """Manages persistent user settings with safe defaults."""
 
@@ -25,17 +26,15 @@ class SettingsManager:
             "fps_limit": 60,
             "vsync": True,
             "fullscreen": False,
-            "resolution": [1280, 720]
+            "resolution": [1280, 720],
         },
         "audio": {
             "master_volume": 100,
-            "music_volume": 80,
-            "sfx_volume": 100,
-            "muted": False
+            "music_volume": 100,
+            "bfx_volume": 100,
+            "muted": False,
         },
-        "controls": {
-            "mouse_sensitivity": 1.0
-        }
+        "controls": {"mouse_sensitivity": 1.0},
     }
 
     def __init__(self, settings_file=None):
@@ -82,7 +81,7 @@ class SettingsManager:
     def save(self):
         """Save current settings to file."""
         try:
-            with open(self.settings_file, 'w') as f:
+            with open(self.settings_file, "w") as f:
                 json.dump(self.settings, f, indent=2)
             DebugLogger.system(f"Saved settings to {self.settings_file}")
         except (IOError, OSError, TypeError) as e:
@@ -109,37 +108,37 @@ class SettingsManager:
 
     def _load(self):
         """Load settings from file or use defaults."""
+
+        # 1. Start with defaults
+        merged_settings = copy.deepcopy(self.DEFAULTS)
+
+        # 2. Load and return defaults if setting file doesn't exist
         if not os.path.exists(self.settings_file):
             DebugLogger.system("Using default settings")
-            return copy.deepcopy(self.DEFAULTS)
+            return merged_settings
 
         try:
-            with open(self.settings_file, 'r') as f:
+            with open(self.settings_file, "r") as f:
                 loaded = json.load(f)
-            DebugLogger.system(f"Loaded settings from {self.settings_file}")
-            return self._merge_with_defaults(loaded)
+            self._merge_recursive(merged_settings, loaded)
+            DebugLogger.system(f"Loaded user settings from {self.settings_file}")
 
         except (json.JSONDecodeError, IOError, OSError) as e:
             DebugLogger.warn(f"Failed to load settings: {e}")
             return copy.deepcopy(self.DEFAULTS)
 
-    def _merge_with_defaults(self, loaded):
-        """
-        Merge loaded settings with defaults.
-        Defaults provide missing keys, loaded values take priority.
-        """
-        merged = copy.deepcopy(self.DEFAULTS)
+        return merged_settings
 
-        for category, values in loaded.items():
-            if not isinstance(values, dict):
-                continue
-
-            if category in merged:
-                merged[category].update(values)
+    def _merge_recursive(self, base, update):
+        """
+        Recursively merge 'update' dict into 'base' dict.
+        Allows partial updates (e.g., only changing volume).
+        """
+        for key, value in update.items():
+            if isinstance(value, dict) and key in base and isinstance(base[key], dict):
+                self._merge_recursive(base[key], value)
             else:
-                merged[category] = values
-
-        return merged
+                base[key] = value
 
 
 # ===========================================================

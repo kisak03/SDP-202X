@@ -31,6 +31,8 @@ from src.core.services.event_manager import (
     EnemyDiedEvent,
     ScreenShakeEvent,
     SpawnPauseEvent,
+    BossDeathEvent,
+    BossSpawnEvent,
 )
 
 # Entities
@@ -51,10 +53,11 @@ from src.scenes.cutscenes.cutscene_action import (
     CallbackAction,
     LockInputAction,
     MoveEntityAction,
-    TextFlashAction,
     UISlideInAction,
     TextScaleFadeAction,
     TextBlinkRevealAction,
+    BossChargeAction,
+    ImageBlinkRevealAction,
 )
 
 # Systems
@@ -63,6 +66,8 @@ from src.systems.game_system_initializer import GameSystemInitializer
 # UI
 from src.scenes.level_up_screen import LevelUp
 
+# Sound
+from src.audio.sound_manager import get_sound_manager
 
 # ===========================================================
 # Constants
@@ -77,16 +82,16 @@ DEFAULT_BACKGROUND = {
         {
             "image": "assets/images/null.png",
             "scroll_speed": [0, -300],
-            "parallax": [0.4, -0.4]
+            "parallax": [0.4, -0.4],
         }
     ]
 }
 
 # Game over timing configuration
 DEFAULT_MUSIC = "IngameBGM"
-GAME_OVER_DELAY = 2           # Seconds before game over screen appears
-GAME_OVER_FADE_SPEED = 200      # Overlay fade speed (lower = slower)
-STAT_REVEAL_DELAY = 0.4         # Seconds between each stat reveal
+GAME_OVER_DELAY = 2  # Seconds before game over screen appears
+GAME_OVER_FADE_SPEED = 200  # Overlay fade speed (lower = slower)
+STAT_REVEAL_DELAY = 0.4  # Seconds between each stat reveal
 
 
 class GameScene(BaseScene):
@@ -132,9 +137,9 @@ class GameScene(BaseScene):
         self._game_over_delay_timer = 0.0
 
         # Stat reveal animation state
-        self._stat_reveal_queue = []        # Labels waiting to be revealed
-        self._stat_reveal_timer = 0.0       # Timer for next reveal
-        self._stat_values = {}              # Cached stat text values
+        self._stat_reveal_queue = []  # Labels waiting to be revealed
+        self._stat_reveal_timer = 0.0  # Timer for next reveal
+        self._stat_values = {}  # Cached stat text values
 
         # --- UI Systems ---
         self._init_level_up_ui()
@@ -163,15 +168,17 @@ class GameScene(BaseScene):
         systems = initializer.initialize()
 
         # Store system references for easy access
-        self.player = systems['player']
+        self.player = systems["player"]
         self.player.sound_manager = services.get_global("sound_manager")
-        self.collision_manager = systems['collision_manager']
-        self.spawn_manager = systems['spawn_manager']
-        self.bullet_manager = systems['bullet_manager']
-        self.level_manager = systems['level_manager']
-        self.effects_manager = systems['effects_manager']
+        self.collision_manager = systems["collision_manager"]
+        self.spawn_manager = systems["spawn_manager"]
+        self.bullet_manager = systems["bullet_manager"]
+        self.level_manager = systems["level_manager"]
+        self.effects_manager = systems["effects_manager"]
+        self.hazard_manager = systems["hazard_manager"]
         self.spawn_manager._effects_manager = self.effects_manager
-        self.ui = systems['ui']
+        self.ui = systems["ui"]
+        self.player.services = self.services
 
     def _init_level_up_ui(self):
         """Initialize level up UI overlay."""
@@ -225,7 +232,7 @@ class GameScene(BaseScene):
         # Audio
 
         # UI setup
-        self.ui.register_binding('player', self.player)
+        self.ui.register_binding("player", self.player)
         self.ui.load_hud("hud/player_hud.yaml")
         # Hide HUD initially - cutscene will slide it in
         self._hide_hud_for_intro()
@@ -240,6 +247,8 @@ class GameScene(BaseScene):
 
         # Subscribe to screen shake events
         get_events().subscribe(ScreenShakeEvent, self._on_screen_shake)
+        get_events().subscribe(BossDeathEvent, self._on_boss_death)
+        get_events().subscribe(BossSpawnEvent, self._on_boss_spawn)
 
         # Start level (loads but doesn't spawn yet)
         self._start_level()
@@ -250,9 +259,38 @@ class GameScene(BaseScene):
     def _hide_hud_for_intro(self):
         """Hide HUD elements off-screen before intro cutscene."""
         for element in self.ui.hud_elements:
-            anchor = getattr(element, 'parent_anchor', 'center')
-            offset = self.ui.ANCHOR_TO_OFFSET.get(anchor, (0, -100))
+            anchor = getattr(element, "parent_anchor", "center")
+            offset = self.ui.ANCHOR_TO_OFFSET.get(anchor, (0, -300))
             element._slide_offset = offset
+
+    def _on_boss_spawn(self, event):
+        """Play boss intro cinematic."""
+        boss = event.boss_ref
+        if not boss:
+            return
+
+        get_sound_manager().play_bfx("boss_intro")
+
+        actions = [
+            # Phase 1: Warning shake + banner slide
+            ImageBlinkRevealAction(
+                image_path="assets/images/ui/bars/warning_banner.png",
+                duration=3.0,  # Total duration
+                fade_in=1.0,  # 0.5s to fade in
+                pulse_duration=1.5,  # 1.5s of pulsing
+                pulse_speed=1.0,  # 2 pulses per second
+                pulse_min_alpha=0.6,  # Pulses between 60% and 100% opacity
+                fade_out=1.0,  # 0.5s to fade out
+                scale=1.0,  # Scale image to 150%
+                y_offset=0,  # Vertical offset from center
+            ),
+            # Phase 2: Boss charges bottom to top
+            BossChargeAction(boss, duration=0.6),
+            DelayAction(0.3),
+            # Phase 3: Normal intro begins (boss descends from top)
+        ]
+
+        self.cutscene_manager.play(actions)
 
     def on_exit(self):
         """
@@ -295,55 +333,56 @@ class GameScene(BaseScene):
 
         actions = [
             # Phase 1: Lock input, position player off-screen, pause BG scroll
-            ActionGroup([
-                LockInputAction(self.player, locked=True),
-                CallbackAction(self._position_player_offscreen),
-            ]),
-
+            ActionGroup(
+                [
+                    LockInputAction(self.player, locked=True),
+                    CallbackAction(self._position_player_offscreen),
+                ]
+            ),
             # Phase 2: Player flies in
             MoveEntityAction(
                 entity=self.player,
                 start_pos=(center_x, start_y),
                 end_pos=(center_x, end_y),
                 duration=1.0,
-                easing="ease_out"
+                easing="ease_out",
             ),
-
             # Phase 3: UI slides in + System text with effects
-            ActionGroup([
-                UISlideInAction(self.ui, duration=0.4, stagger=0.4),
-                TextScaleFadeAction(
-                    "MAIN SYSTEM",
-                    duration=0.5,
-                    start_scale=1.6,
-                    end_scale=1.0,
-                    font_size=36,
-                    hold_time=1.5,
-                    fade_out=0.2,
-                    y_offset=-40
-                ),
-                TextScaleFadeAction(
-                    "---",
-                    duration=0.5,
-                    start_scale=1.5,
-                    end_scale=1.0,
-                    font_size=36,
-                    hold_time=1.5,
-                    fade_out=0.2,
-                    y_offset=0
-                ),
-                TextScaleFadeAction(
-                    "COMBAT MODE ACTIVE",
-                    duration=0.5,
-                    start_scale=1.6,
-                    end_scale=1.0,
-                    font_size=28,
-                    hold_time=1.5,
-                    fade_out=0.2,
-                    y_offset=40
-                ),
-            ]),
-
+            ActionGroup(
+                [
+                    UISlideInAction(self.ui, duration=0.4, stagger=0.4),
+                    TextScaleFadeAction(
+                        "MAIN SYSTEM",
+                        duration=0.5,
+                        start_scale=1.6,
+                        end_scale=1.0,
+                        font_size=36,
+                        hold_time=1.5,
+                        fade_out=0.2,
+                        y_offset=-40,
+                    ),
+                    TextScaleFadeAction(
+                        "---",
+                        duration=0.5,
+                        start_scale=1.5,
+                        end_scale=1.0,
+                        font_size=36,
+                        hold_time=1.5,
+                        fade_out=0.2,
+                        y_offset=0,
+                    ),
+                    TextScaleFadeAction(
+                        "COMBAT MODE ACTIVE",
+                        duration=0.5,
+                        start_scale=1.6,
+                        end_scale=1.0,
+                        font_size=28,
+                        hold_time=1.5,
+                        fade_out=0.2,
+                        y_offset=40,
+                    ),
+                ]
+            ),
             # Phase 4: Commence mission with blink effect
             TextBlinkRevealAction(
                 "COMMENCE MISSION",
@@ -351,14 +390,15 @@ class GameScene(BaseScene):
                 font_size=48,
                 blink_count=10,
                 hold_time=1.0,
-                fade_out=0.3
+                fade_out=0.3,
             ),
-
             # Phase 5: Enable gameplay
-            ActionGroup([
-                LockInputAction(self.player, locked=False),
-                CallbackAction(self._on_intro_complete),
-            ]),
+            ActionGroup(
+                [
+                    LockInputAction(self.player, locked=False),
+                    CallbackAction(self._on_intro_complete),
+                ]
+            ),
         ]
 
         self.cutscene_manager.play(actions)
@@ -442,14 +482,38 @@ class GameScene(BaseScene):
 
                 merged = {
                     "image": image,
-                    "scroll_speed": layer.get("scroll_speed", default_layer["scroll_speed"]),
-                    "parallax": layer.get("parallax", default_layer["parallax"])
+                    "scroll_speed": layer.get(
+                        "scroll_speed", default_layer["scroll_speed"]
+                    ),
+                    "parallax": layer.get("parallax", default_layer["parallax"]),
                 }
                 bg_config["layers"].append(merged)
         else:
             bg_config = DEFAULT_BACKGROUND
 
         self._setup_background(bg_config)
+
+        is_snow_map = False
+        base_image_path = bg_config["layers"][0]["image"]
+        if "snow" in base_image_path.lower():
+            is_snow_map = True
+
+        DebugLogger.init(f"[BG Check] Path: {base_image_path}, Is Snow?: {is_snow_map}")
+
+        if self.bg_manager.layer_count > 0 and is_snow_map:
+            base_layer = self.bg_manager.get_layer(0)
+
+            rock_images = [
+                "assets/images/maps/rock_1.png",
+                "assets/images/maps/rock_2.png",
+                "assets/images/maps/rock_3.png",
+                "assets/images/maps/rock_4.png",
+                "assets/images/maps/rock_5.png",
+            ]
+            if hasattr(base_layer, "random_scatter_objects"):
+                base_layer.random_scatter_objects(
+                    object_paths=rock_images, count=7, min_distance=200
+                )
 
     def _load_level_music(self, level_data):
         """
@@ -555,7 +619,11 @@ class GameScene(BaseScene):
         Returns:
             bool: True if player died and game over triggered
         """
-        if not self.game_over_shown and not self._game_over_pending and self.player.death_state == LifecycleState.DEAD:
+        if (
+            not self.game_over_shown
+            and not self._game_over_pending
+            and self.player.death_state == LifecycleState.DEAD
+        ):
             if self.level_up_ui.is_active:
                 self.level_up_ui.hide()
             # Start delayed game over sequence
@@ -580,6 +648,10 @@ class GameScene(BaseScene):
                 self.input_manager.set_context("ui")
                 self.level_up_ui.show()
                 self.last_player_level = self.player.level
+
+                sound_manager = self.services.get_global("sound_manager")
+                sound_manager.stop_all_bfx()
+                sound_manager.play_bfx("level_up")
                 return True
             else:
                 # Player died while leveling - update tracker only
@@ -617,6 +689,7 @@ class GameScene(BaseScene):
         self.player.update(dt)
         self.spawn_manager.update(dt)
         self.bullet_manager.update(dt)
+        self.hazard_manager.update(dt)
         self.level_manager.update(dt)
         self.effects_manager.update(dt)
 
@@ -626,6 +699,7 @@ class GameScene(BaseScene):
 
         # Entity cleanup
         self.spawn_manager.cleanup()
+        self.hazard_manager.cleanup()
 
         # UI update
         mouse_pos = self.input_manager.get_effective_mouse_pos()
@@ -656,6 +730,7 @@ class GameScene(BaseScene):
         self.player.draw(draw_manager)
         self.spawn_manager.draw()
         self.bullet_manager.draw(draw_manager)
+        self.hazard_manager.draw()
 
         # Screen effects
         self.effects_manager.draw(draw_manager)
@@ -686,6 +761,13 @@ class GameScene(BaseScene):
         Args:
             event: pygame event object
         """
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_n:
+            from src.entities.player.player_effects import handle_USE_NUKE
+
+            if self.player and self.player.death_state == LifecycleState.ALIVE:
+                handle_USE_NUKE(self.player, {})
+            return
+
         # UI event handling (includes level_up when active)
         action = self.ui.handle_event(event)
         self._handle_ui_action(action)
@@ -726,9 +808,12 @@ class GameScene(BaseScene):
             self._game_over_delay_timer = GAME_OVER_DELAY
 
             DebugLogger.state(
-                f"Level complete - game over in {GAME_OVER_DELAY}s",
-                category="game"
+                f"Level complete - game over in {GAME_OVER_DELAY}s", category="game"
             )
+
+    def _on_boss_death(self, event):
+        """Handle boss death - trigger level complete."""
+        self._on_level_complete()
 
     def _on_enemy_died(self, event):
         """
@@ -742,6 +827,10 @@ class GameScene(BaseScene):
 
         sound_manager = self.services.get_global("sound_manager")
         sound_manager.play_bfx("enemy_destroy")
+
+        if get_session_stats().score > 0 and get_session_stats().score % 100 == 0:
+            score_sound = ["score_sound1", "score_sound2", "score_sound3"]
+            sound_manager.play_random_bfx(score_sound)
 
     def _on_screen_shake(self, event):
         """Handle screen shake event."""
@@ -773,7 +862,10 @@ class GameScene(BaseScene):
 
         # Audio transition
         sound_manager = self.services.get_global("sound_manager")
-        sound_manager.play_bgm("game_over", -1)
+        if victory:
+            sound_manager.play_bgm("game_clear", -1)
+        else:
+            sound_manager.play_bgm("game_over", -1)
 
         # Update title based on outcome
         self._update_game_over_title(victory)
@@ -820,18 +912,18 @@ class GameScene(BaseScene):
         seconds = int(stats.run_time % 60)
 
         self._stat_values = {
-            'score_label': f"Score: {stats.score}",
-            'kills_label': f"Enemies Killed: {stats.enemies_killed}",
-            'items_label': f"Items Collected: {stats.items_collected}",
-            'time_label': f"Time: {minutes}:{seconds:02d}"
+            "score_label": f"Score: {stats.score}",
+            "kills_label": f"Enemies Killed: {stats.enemies_killed}",
+            "items_label": f"Items Collected: {stats.items_collected}",
+            "time_label": f"Time: {minutes}:{seconds:02d}",
         }
 
         # Queue for reveal order
         self._stat_reveal_queue = [
-            'score_label',
-            'kills_label',
-            'items_label',
-            'time_label'
+            "score_label",
+            "kills_label",
+            "items_label",
+            "time_label",
         ]
 
         # Reset reveal timer
@@ -869,7 +961,4 @@ class GameScene(BaseScene):
                     elem.text = self._stat_values[label_id]
                     elem.mark_dirty()
 
-                    DebugLogger.state(
-                        f"Revealed stat: {label_id}",
-                        category="game"
-                    )
+                    DebugLogger.state(f"Revealed stat: {label_id}", category="game")

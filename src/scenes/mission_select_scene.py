@@ -14,11 +14,13 @@ class MissionSelectScene(BaseScene):
     BACKGROUNDS_PATH = "assets/images/backgrounds/"
 
     BACKGROUND_CONFIG = {
-        "layers": [{
-            "image": BACKGROUNDS_PATH + "mission_select.png",
-            "scroll_speed": [0, 0],
-            "parallax": [0, 0]
-        }]
+        "layers": [
+            {
+                "image": BACKGROUNDS_PATH + "mission_select.png",
+                "scroll_speed": [0, 0],
+                "parallax": [0, 0],
+            }
+        ]
     }
 
     def __init__(self, services):
@@ -46,6 +48,11 @@ class MissionSelectScene(BaseScene):
         """Update selection logic."""
         self._update_background(dt)
 
+        # ESC key to go back
+        if self.input_manager.action_pressed("back"):
+            self.scene_manager.set_scene("MainMenu", transition=FadeTransition(0.3))
+            return
+
         mouse_pos = self.input_manager.get_effective_mouse_pos()
         self.ui.update(dt, mouse_pos)
 
@@ -59,7 +66,9 @@ class MissionSelectScene(BaseScene):
 
         if action and action.startswith("select_level_"):
             level_id = action.replace("select_level_", "")
-            self.scene_manager.set_scene("Game", transition=FadeTransition(0.5), level_id=level_id)
+            self.scene_manager.set_scene(
+                "Game", transition=FadeTransition(0.5), level_id=level_id
+            )
 
         elif action == "back":
             self.scene_manager.set_scene("MainMenu", transition=FadeTransition(0.3))
@@ -77,7 +86,7 @@ class MissionSelectScene(BaseScene):
                 level = all_levels[i]
                 # Update button text and action
                 button.text = level.name
-                button.action = f'select_level_{level.id}'
+                button.action = f"select_level_{level.id}"
                 button.enabled = level.unlocked
 
                 # # Visual feedback for locked missions

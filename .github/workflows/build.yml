@@ -33,7 +33,9 @@ jobs:
         pip install pygame pyinstaller pyyaml
     - name: pyinstaller
       run: |
-        pyinstaller --onefile --noconsole main.py
+        pyinstaller --noconsole main.py
+        cp ./src ./dist/
+        cp ./assets ./dist/assets
 
     - name: create a zip file (windows)
       if: ${{ matrix.os == 'windows-latest' }}
@@ -52,6 +54,13 @@ jobs:
         name: windows_file
         path: dist/main.exe
 
+    - name: Upload artifact (mac os)
+      if: ${{ matrix.os == 'macos-latest' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: mac_file
+        path: dist/main.app
+
     - name: Upload release (windows)
       if: ${{ matrix.os == 'windows-latest' }}
       uses: actions/upload-release-asset@v1
@@ -62,13 +71,6 @@ jobs:
         asset_path: ./dist.zip
         asset_name: main-windows-${{ inputs.tags }}.zip
         asset_content_type: application/zip
-
-    - name: Upload artifact (mac os)
-      if: ${{ matrix.os == 'macos-latest' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: mac_file
-        path: dist/main.app
 
     - name: Upload release (mac os)
       if: ${{ matrix.os == 'macos-latest' }}

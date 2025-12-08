@@ -33,7 +33,7 @@ jobs:
         pip install pygame pyinstaller pyyaml
     - name: pyinstaller
       run: |
-        pyinstaller --noconsole main.py
+        pyinstaller --noconsole --add-data "assets/*;assets" --add-data "src/config/*;src/config" main.py
 
     - name: create a zip file (windows)
       if: ${{ matrix.os == 'windows-latest' }}

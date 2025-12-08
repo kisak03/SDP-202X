@@ -34,17 +34,19 @@ jobs:
     - name: pyinstaller
       run: |
         pyinstaller --noconsole main.py
-        cp ./src ./dist/
-        cp ./assets ./dist/assets
 
     - name: create a zip file (windows)
       if: ${{ matrix.os == 'windows-latest' }}
       run: |
+        cp ./src ./dist/
+        cp ./assets ./dist/
         tar -acf dist.zip ./dist
 
     - name: create a zip file (mac os)
       if: ${{ matrix.os == 'macos-latest' }}
       run: |
+        cp -r ./src ./dist/
+        cp -r ./assets ./dist/
         zip -r dist.zip ./dist
 
     - name: Upload artifact (windows)

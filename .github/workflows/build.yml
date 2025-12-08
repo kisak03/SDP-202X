@@ -33,7 +33,7 @@ jobs:
         pip install pygame pyinstaller pyyaml
     - name: pyinstaller
       run: |
-        pyinstaller --noconsole --add-data="assets/*;assets" --add-data="src/config/*;src/config" main.py
+        pyinstaller --noconsole --add-data="assets/*;assets" --add-data="src/*;src" main.py
 
     - name: create a zip file (windows)
       if: ${{ matrix.os == 'windows-latest' }}
@@ -47,8 +47,6 @@ jobs:
     - name: create a zip file (mac os)
       if: ${{ matrix.os == 'macos-latest' }}
       run: |
-        cp -r ./src/* ./dist/main
-        cp -r ./assets/* ./dist/main
         zip -r dist.zip ./dist
 
     - name: Upload artifact (windows)
